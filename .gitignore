@@ -36,6 +36,13 @@ Thumbs.db
 *.log
 logs/
 
+# Backup files (contain database data)
+my_company_backup_*.json.gz
+
+# Docker persistent data
+postgres_data/
+redis_data/
+
 # Local test artifacts
 tests/
 

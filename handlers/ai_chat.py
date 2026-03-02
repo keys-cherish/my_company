@@ -1,14 +1,17 @@
-"""@机器人 即时AI对话处理器。"""
+"""@机器人 即时AI对话处理器 — 支持意图路由、工具调用和图片生成。"""
 
 from __future__ import annotations
 
+import base64
 import re
+import tempfile
 
 from aiogram import F, Router, types
+from aiogram.enums import ParseMode
 
 from cache.redis_client import get_redis
 from config import settings
-from services.ai_chat_service import ask_ai_chat
+from services.ai_chat_service import ask_ai_smart, detect_image_intent
 from db.engine import async_session
 from db.models import CompanyOperationProfile
 from services.company_service import get_companies_by_owner, get_company_type_info, get_level_info
@@ -120,16 +123,80 @@ async def on_ai_bot_mention(message: types.Message):
         return
 
     company_context = await _build_user_company_context(tg_id)
-    prompt_with_context = (
-        "请基于以下提问者经营数据给出建议。\n\n"
-        f"【提问者信息】\n{company_context}\n\n"
-        f"【用户问题】\n{prompt}\n\n"
-        "要求：优先给可执行建议，必要时给简短分步方案。"
+
+    # Determine model for the pending message
+    if detect_image_intent(prompt):
+        pending_model = (settings.ai_image_model or "").strip() or "grok-imagine-1.0"
+    else:
+        pending_model = (settings.ai_model or "").strip() or "gpt-4o-mini"
+
+    pending = await message.reply(
+        f"🤖 努力思考中，请稍等…\n<blockquote>📡 {pending_model}</blockquote>",
+        parse_mode=ParseMode.HTML,
     )
 
-    pending = await message.reply("🤖 努力思考中，请稍等…")
-    reply = await ask_ai_chat(prompt_with_context)
+    content, response_type, model_name = await ask_ai_smart(prompt, company_context, tg_id)
+
+    model_tag = f"\n<blockquote>📡 {model_name}</blockquote>" if model_name else ""
+
     try:
-        await pending.edit_text(reply)
+        if response_type in ("image", "images"):
+            # Collect URLs (single or multiple, newline-separated)
+            urls = [u.strip() for u in content.split("\n") if u.strip()]
+            sent = False
+            for i, url in enumerate(urls):
+                try:
+                    # Only add model caption to the last photo
+                    caption = f"<blockquote>📡 {model_name}</blockquote>" if model_name and i == len(urls) - 1 else None
+                    cap_parse = ParseMode.HTML if caption else None
+                    if url.startswith("base64:"):
+                        b64_data = url[7:]
+                        img_bytes = base64.b64decode(b64_data)
+                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                            f.write(img_bytes)
+                            f.flush()
+                            photo = types.FSInputFile(f.name)
+                            await message.reply_photo(photo=photo, caption=caption, parse_mode=cap_parse)
+                    else:
+                        await message.reply_photo(photo=url, caption=caption, parse_mode=cap_parse)
+                    sent = True
+                except Exception:
+                    pass
+            if not sent:
+                await pending.edit_text("图片发送失败，请稍后再试。")
+            else:
+                try:
+                    await pending.delete()
+                except Exception:
+                    pass
+        else:
+            # Text response (HTML blockquote) + model tag
+            full = content + model_tag
+            try:
+                await pending.edit_text(full, parse_mode=ParseMode.HTML)
+            except Exception:
+                # Fallback: if HTML parsing fails, send plain text
+                plain = (
+                    content.replace("<blockquote expandable>", "")
+                    .replace("</blockquote>", "")
+                )
+                if model_name:
+                    plain += f"\n📡 {model_name}"
+                try:
+                    await pending.edit_text(plain)
+                except Exception:
+                    await message.reply(full, parse_mode=ParseMode.HTML)
     except Exception:
-        await message.reply(reply)
+        # Ultimate fallback
+        plain = (
+            content.replace("<blockquote expandable>", "")
+            .replace("</blockquote>", "")
+        )
+        if model_name:
+            plain += f"\n📡 {model_name}"
+        if len(plain) > 4096:
+            plain = plain[:4093] + "..."
+        try:
+            await pending.edit_text(plain)
+        except Exception:
+            await message.reply(plain)
