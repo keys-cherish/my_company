@@ -181,7 +181,7 @@ async def on_ai_bot_mention(message: types.Message):
 
     # Determine model for the pending message
     if detect_image_intent(prompt):
-        pending_model = (settings.ai_image_model or "").strip() or "grok-imagine-1.0"
+        pending_model = (settings.ai_image_model or "").strip() or "grok-imagine-1.0-edit"
     else:
         pending_model = (settings.ai_model or "").strip() or "gpt-4o-mini"
 

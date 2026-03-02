@@ -685,7 +685,7 @@ async def ask_ai_smart(
         return "AI 功能未启用。", "text", ""
 
     chat_model = (settings.ai_model or "").strip() or "gpt-4o-mini"
-    image_model = (settings.ai_image_model or "").strip() or "grok-imagine-1.0"
+    image_model = (settings.ai_image_model or "").strip() or "grok-imagine-1.0-edit"
 
     # ── 1. Image intent ───────────────────────────────────────────────
     if detect_image_intent(prompt):
@@ -816,11 +816,11 @@ async def ask_ai_smart(
 # ── Image Generation ─────────────────────────────────────────────────────
 
 async def generate_image(prompt: str) -> str | None:
-    """Generate an image via grok-imagine-1.0. Returns image URL or None."""
+    """Generate an image via grok-imagine-1.0-edit. Returns image URL or None."""
     try:
         import httpx
 
-        image_model = (settings.ai_image_model or "").strip() or "grok-imagine-1.0"
+        image_model = (settings.ai_image_model or "").strip() or "grok-imagine-1.0-edit"
         url = _normalize_image_url(settings.ai_api_base_url)
         headers = _build_headers()
         timeout = max(10, int(settings.ai_timeout_seconds) * 2)
