@@ -103,6 +103,37 @@ def extract_image_urls(text: str) -> list[str]:
     return _IMG_URL_RE.findall(text)
 
 
+# ── XML Tool Call Fallback (for models that emit <xtoolcall> in text) ────
+
+_XTOOLCALL_RE = _re.compile(
+    r'<xtoolcall\s+name="([^"]+)"[^>]*>(.*?)</xtoolcall>',
+    _re.DOTALL,
+)
+
+
+def _parse_xml_tool_calls(text: str) -> list[dict] | None:
+    """Parse <xtoolcall> XML-style tool calls from model text content."""
+    matches = _XTOOLCALL_RE.findall(text)
+    if not matches:
+        return None
+    tool_calls = []
+    for i, (name, args_str) in enumerate(matches):
+        args_str = args_str.strip()
+        try:
+            args = json.loads(args_str) if args_str else {}
+        except Exception:
+            args = {}
+        tool_calls.append({
+            "id": f"xml_tc_{i}",
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": json.dumps(args),
+            },
+        })
+    return tool_calls
+
+
 # ── Company-Related Intent Detection ─────────────────────────────────────
 
 COMPANY_KEYWORDS = [
@@ -690,6 +721,46 @@ async def ask_ai_smart(
             choice = (data.get("choices") or [{}])[0]
             message = choice.get("message") or {}
             tool_calls = message.get("tool_calls")
+
+            # Fallback: some models (e.g. grok) emit tool calls as
+            # <xtoolcall> XML in the text content instead of using the
+            # standard tool_calls field.
+            if not tool_calls:
+                content = _extract_content_text(message.get("content", ""))
+                xml_tcs = _parse_xml_tool_calls(content) if tools else None
+                if xml_tcs:
+                    # Execute XML-parsed tool calls
+                    tool_results: list[str] = []
+                    for tc in xml_tcs:
+                        fn = tc.get("function") or {}
+                        fn_name = fn.get("name", "")
+                        try:
+                            fn_args = json.loads(fn.get("arguments", "{}"))
+                        except Exception:
+                            fn_args = {}
+                        result_str = await execute_tool(fn_name, fn_args, tg_id)
+                        tool_results.append(f"[{fn_name}] {result_str}")
+
+                    # Feed results back as a user message (safer for models
+                    # that don't support the standard tool protocol).
+                    results_text = "\n\n".join(tool_results)
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"以下是你请求的工具调用结果，请根据结果回答用户的问题：\n\n"
+                            f"{results_text}"
+                        ),
+                    })
+                    # Make a final call without tools so the model summarises
+                    data = await _call_chat_api(messages, tools=None)
+                    choice = (data.get("choices") or [{}])[0]
+                    message = choice.get("message") or {}
+                    final = _extract_content_text(message.get("content", ""))
+                    img_urls = extract_image_urls(final)
+                    if img_urls:
+                        return "\n".join(img_urls), "images", chat_model
+                    return _wrap_blockquote(final or "AI 暂时没有给出有效回复。"), "text", chat_model
 
             if not tool_calls:
                 # No tool calls – extract final text
