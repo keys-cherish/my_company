@@ -213,6 +213,24 @@ def get_company_employee_limit(level: int, company_type: str | None = None) -> i
     return max(settings.base_employee_limit, min(total, settings.max_employee_limit))
 
 
+def calc_employee_income(employee_count: int, revenue: int) -> tuple[int, int]:
+    """Calculate employee workforce income contribution.
+
+    Returns (base_output, efficiency_bonus).
+    """
+    if employee_count <= 0:
+        return (0, 0)
+
+    # Base output: each employee produces 1.5x their salary
+    base_output = int(employee_count * settings.employee_salary_base * 1.5)
+
+    # Efficiency bonus: proportional to revenue, diminishing past soft cap
+    effective = min(employee_count, settings.employee_effective_cap_for_progress)
+    efficiency_bonus = int(revenue * effective * 0.002)
+
+    return (base_output, efficiency_bonus)
+
+
 def get_effective_employee_count_for_progress(employee_count: int) -> int:
     """Soft-cap effective workforce used by progression gates."""
     if employee_count <= 0:

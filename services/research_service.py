@@ -282,6 +282,11 @@ async def start_research(
     )
 
 
+async def sync_research_progress_if_due(session: AsyncSession, company_id: int) -> list[str]:
+    """Alias for check_and_complete_research – used by company view to sync state."""
+    return await check_and_complete_research(session, company_id)
+
+
 async def check_and_complete_research(session: AsyncSession, company_id: int) -> list[str]:
     """Check all in-progress research; complete those past duration. Returns list of completed tech names."""
     tree = _load_tech_tree()
