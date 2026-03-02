@@ -6,6 +6,7 @@ import base64
 import json
 import re
 import tempfile
+from io import BytesIO
 
 from aiogram import F, Router, types
 from aiogram.enums import ParseMode
@@ -179,6 +180,18 @@ async def on_ai_bot_mention(message: types.Message):
             message.chat.id, reply_to.message_id,
         )
 
+    # ── Download image from replied-to bot photo (for editing) ─────
+    reply_image: bytes | None = None
+    if reply_to_bot and reply_to and reply_to.photo:
+        try:
+            photo_obj = reply_to.photo[-1]  # highest resolution
+            file_info = await message.bot.get_file(photo_obj.file_id)
+            buf = BytesIO()
+            await message.bot.download_file(file_info.file_path, buf)
+            reply_image = buf.getvalue()
+        except Exception:
+            pass
+
     # Determine model for the pending message
     if detect_image_intent(prompt):
         pending_model = (settings.ai_image_model or "").strip() or "grok-imagine-1.0-edit"
@@ -192,6 +205,7 @@ async def on_ai_bot_mention(message: types.Message):
 
     content, response_type, model_name = await ask_ai_smart(
         prompt, company_context, tg_id, history=conv_history,
+        image=reply_image,
     )
 
     model_tag = f"\n<blockquote>📡 {model_name}</blockquote>" if model_name else ""
@@ -228,7 +242,11 @@ async def on_ai_bot_mention(message: types.Message):
                 try:
                     await pending.delete()
                 except Exception:
-                    pass
+                    try:
+                        tag = f"📡 {model_name}" if model_name else "✅"
+                        await pending.edit_text(tag)
+                    except Exception:
+                        pass
         else:
             # Text response (HTML blockquote) + model tag
             full = content + model_tag

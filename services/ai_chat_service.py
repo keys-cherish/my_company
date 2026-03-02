@@ -572,14 +572,15 @@ def _normalize_completion_url(base_url: str) -> str:
     return f"{candidate}/chat/completions"
 
 
-def _normalize_image_url(base_url: str) -> str:
+def _normalize_image_url(base_url: str, endpoint: str = "generations") -> str:
     candidate = (base_url or "").strip() or DEFAULT_AI_BASE_URL
     candidate = candidate.rstrip("/")
-    if candidate.endswith("/images/generations"):
-        return candidate
-    # strip /chat/completions if present
-    candidate = candidate.replace("/chat/completions", "")
-    return f"{candidate}/images/generations"
+    # strip known trailing paths
+    for suffix in ("/images/generations", "/images/edits", "/chat/completions"):
+        if candidate.endswith(suffix):
+            candidate = candidate[: -len(suffix)]
+            break
+    return f"{candidate}/images/{endpoint}"
 
 
 def _parse_extra_headers(raw: str) -> dict[str, str]:
@@ -671,6 +672,7 @@ async def ask_ai_smart(
     tg_id: int,
     *,
     history: list[dict] | None = None,
+    image: bytes | None = None,
 ) -> tuple[str, str, str]:
     """Smart AI with intent routing and tool calling.
 
@@ -680,6 +682,8 @@ async def ask_ai_smart(
 
     *history* is an optional list of prior ``{"role": ..., "content": ...}``
     messages for multi-turn conversation.
+
+    *image* is optional source image bytes for editing (reply-to-photo scenario).
     """
     if not settings.ai_enabled or not settings.ai_api_key.strip():
         return "AI 功能未启用。", "text", ""
@@ -689,7 +693,10 @@ async def ask_ai_smart(
 
     # ── 1. Image intent ───────────────────────────────────────────────
     if detect_image_intent(prompt):
-        url = await generate_image(prompt)
+        if image:
+            url = await edit_image(prompt, image)
+        else:
+            url = await generate_image(prompt)
         if url:
             return url, "image", image_model
         return _wrap_blockquote("图片生成失败，请稍后再试。"), "text", image_model
@@ -720,7 +727,19 @@ async def ask_ai_smart(
     # Insert conversation history for multi-turn dialogue
     if history:
         messages.extend(history)
-    messages.append({"role": "user", "content": user_content})
+
+    # If an image is attached (reply-to-photo) but no image-generation
+    # intent, pass it as vision content so the model can see the picture.
+    if image:
+        import base64 as _b64mod
+        b64_str = _b64mod.b64encode(image).decode()
+        user_msg_content: str | list = [
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_str}"}},
+            {"type": "text", "text": user_content},
+        ]
+    else:
+        user_msg_content = user_content
+    messages.append({"role": "user", "content": user_msg_content})
 
     try:
         # ── Tool-calling loop (max 5 rounds) ──────────────────────────
@@ -813,15 +832,15 @@ async def ask_ai_smart(
         return _wrap_blockquote("AI 服务暂时不可用，请稍后再试。"), "text", chat_model
 
 
-# ── Image Generation ─────────────────────────────────────────────────────
+# ── Image Generation / Editing ───────────────────────────────────────────
 
 async def generate_image(prompt: str) -> str | None:
-    """Generate an image via grok-imagine-1.0-edit. Returns image URL or None."""
+    """Generate a new image from text. Returns image URL or None."""
     try:
         import httpx
 
         image_model = (settings.ai_image_model or "").strip() or "grok-imagine-1.0-edit"
-        url = _normalize_image_url(settings.ai_api_base_url)
+        url = _normalize_image_url(settings.ai_api_base_url, "generations")
         headers = _build_headers()
         timeout = max(10, int(settings.ai_timeout_seconds) * 2)
 
@@ -836,22 +855,52 @@ async def generate_image(prompt: str) -> str | None:
             resp.raise_for_status()
             data = resp.json()
 
-        # OpenAI-compatible format: data.data[0].url
-        images = data.get("data") or []
-        if images and isinstance(images[0], dict):
-            img_url = images[0].get("url")
-            if img_url:
-                return img_url
-            # Some providers return b64_json
-            b64 = images[0].get("b64_json")
-            if b64:
-                return f"base64:{b64}"
-
-        return None
+        return _extract_image_result(data)
 
     except Exception as exc:
         logger.warning("Image generation failed: %s", exc, exc_info=True)
         return None
+
+
+async def edit_image(prompt: str, image: bytes) -> str | None:
+    """Edit an existing image. Sends source image + prompt to /images/edits."""
+    try:
+        import httpx
+
+        image_model = (settings.ai_image_model or "").strip() or "grok-imagine-1.0-edit"
+        url = _normalize_image_url(settings.ai_api_base_url, "edits")
+        timeout = max(10, int(settings.ai_timeout_seconds) * 2)
+
+        # multipart/form-data — don't set Content-Type manually
+        headers = {"Authorization": f"Bearer {settings.ai_api_key}"}
+        headers.update(_parse_extra_headers(settings.ai_extra_headers_json))
+
+        files = {"image": ("image.png", image, "image/png")}
+        form = {"model": image_model, "prompt": prompt, "n": "1"}
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url, data=form, files=files, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+        return _extract_image_result(data)
+
+    except Exception as exc:
+        logger.warning("Image edit failed: %s", exc, exc_info=True)
+        return None
+
+
+def _extract_image_result(data: dict) -> str | None:
+    """Extract image URL or b64 from OpenAI-compatible response."""
+    images = data.get("data") or []
+    if images and isinstance(images[0], dict):
+        img_url = images[0].get("url")
+        if img_url:
+            return img_url
+        b64 = images[0].get("b64_json")
+        if b64:
+            return f"base64:{b64}"
+    return None
 
 
 # ── HTML Formatting ──────────────────────────────────────────────────────
