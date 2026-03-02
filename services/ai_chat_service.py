@@ -796,7 +796,7 @@ async def ask_ai_smart(
                     final = _extract_content_text(message.get("content", ""))
                     img_urls = extract_image_urls(final)
                     if img_urls:
-                        return "\n".join(img_urls), "images", chat_model
+                        return img_urls[0], "image", chat_model
                     return _wrap_blockquote(final or "AI 暂时没有给出有效回复。"), "text", chat_model
 
             if not tool_calls:
@@ -805,7 +805,7 @@ async def ask_ai_smart(
                 # Check if the AI returned inline image URLs (e.g. grok)
                 img_urls = extract_image_urls(content)
                 if img_urls:
-                    return "\n".join(img_urls), "images", chat_model
+                    return img_urls[0], "image", chat_model
                 return _wrap_blockquote(content or "AI 暂时没有给出有效回复。"), "text", chat_model
 
             # Append assistant message with tool_calls
@@ -834,7 +834,7 @@ async def ask_ai_smart(
         content = _extract_content_text(message.get("content", ""))
         img_urls = extract_image_urls(content)
         if img_urls:
-            return "\n".join(img_urls), "images", chat_model
+            return img_urls[0], "image", chat_model
         return _wrap_blockquote(content or "AI 暂时没有给出有效回复。"), "text", chat_model
 
     except Exception as exc:
