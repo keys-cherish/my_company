@@ -706,7 +706,10 @@ async def ask_ai_smart(
             url = await generate_image(prompt)
         if url:
             return url, "image", image_model
-        return _wrap_blockquote("图片生成失败，请稍后再试。"), "text", image_model
+        if not image:
+            return _wrap_blockquote("图片生成失败，请稍后再试。"), "text", image_model
+        # edit_image failed → fall through to chat model with vision
+        logger.info("edit_image failed, falling back to chat model vision")
 
     # ── 2. Company or general intent ──────────────────────────────────
     is_company = detect_company_intent(prompt)
