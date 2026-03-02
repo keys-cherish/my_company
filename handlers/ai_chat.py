@@ -5,7 +5,9 @@ from __future__ import annotations
 import base64
 import json
 import re
+import struct
 import tempfile
+import zlib
 from io import BytesIO
 
 from aiogram import F, Router, types
@@ -13,7 +15,7 @@ from aiogram.enums import ParseMode
 
 from cache.redis_client import get_redis
 from config import settings
-from services.ai_chat_service import ask_ai_smart
+from services.ai_chat_service import ask_ai_smart, detect_image_intent
 from db.engine import async_session
 from db.models import CompanyOperationProfile
 from services.company_service import get_companies_by_owner, get_company_type_info, get_level_info
@@ -25,6 +27,27 @@ AI_MENTION_LIMIT_PER_MINUTE = 10
 AI_MENTION_WINDOW_SECONDS = 60
 CONV_HISTORY_TTL = 1800  # 30 minutes
 CONV_MAX_TURNS = 10      # keep last 10 exchanges (20 messages)
+
+
+# ── Placeholder PNG for image-intent pending message ─────────────────────
+
+def _make_placeholder_png() -> bytes:
+    """Generate a 200x200 solid dark PNG without external libraries."""
+    w, h = 200, 200
+    r, g, b = 30, 30, 40
+
+    def _chunk(ctype: bytes, data: bytes) -> bytes:
+        c = ctype + data
+        return struct.pack('>I', len(data)) + c + struct.pack('>I', zlib.crc32(c) & 0xFFFFFFFF)
+
+    ihdr = _chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
+    scanline = b'\x00' + bytes([r, g, b]) * w
+    idat = _chunk(b'IDAT', zlib.compress(scanline * h))
+    iend = _chunk(b'IEND', b'')
+    return b'\x89PNG\r\n\x1a\n' + ihdr + idat + iend
+
+
+_PLACEHOLDER_PNG = _make_placeholder_png()
 
 
 def _is_admin_or_super_admin(tg_id: int) -> bool:
@@ -192,13 +215,22 @@ async def on_ai_bot_mention(message: types.Message):
         except Exception:
             pass
 
-    # Determine model for the pending message
+    # Determine model and pending message type
     pending_model = (settings.ai_model or "").strip() or "gpt-4o-mini"
+    pending_caption = f"🤖 努力思考中，请稍等…\n<blockquote>📡 {pending_model}</blockquote>"
+    is_image_intent = detect_image_intent(prompt)
 
-    pending = await message.reply(
-        f"🤖 努力思考中，请稍等…\n<blockquote>📡 {pending_model}</blockquote>",
-        parse_mode=ParseMode.HTML,
-    )
+    if is_image_intent:
+        pending = await message.reply_photo(
+            photo=types.BufferedInputFile(_PLACEHOLDER_PNG, filename="loading.png"),
+            caption=pending_caption,
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        pending = await message.reply(
+            pending_caption,
+            parse_mode=ParseMode.HTML,
+        )
 
     content, response_type, model_name = await ask_ai_smart(
         prompt, company_context, tg_id, history=conv_history,
@@ -212,56 +244,92 @@ async def on_ai_bot_mention(message: types.Message):
 
     try:
         if response_type in ("image", "images"):
-            # Collect URLs (single or multiple, newline-separated)
-            urls = [u.strip() for u in content.split("\n") if u.strip()]
-            sent = False
-            for i, url in enumerate(urls):
+            url = content.strip()
+            cap = f"<blockquote>📡 {model_name}</blockquote>" if model_name else None
+            cap_parse = ParseMode.HTML if cap else None
+
+            if is_image_intent:
+                # Pending is a photo → edit_media in place
                 try:
-                    # Only add model caption to the last photo
-                    caption = f"<blockquote>📡 {model_name}</blockquote>" if model_name and i == len(urls) - 1 else None
-                    cap_parse = ParseMode.HTML if caption else None
                     if url.startswith("base64:"):
-                        b64_data = url[7:]
-                        img_bytes = base64.b64decode(b64_data)
-                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-                            f.write(img_bytes)
-                            f.flush()
-                            photo = types.FSInputFile(f.name)
-                            await message.reply_photo(photo=photo, caption=caption, parse_mode=cap_parse)
+                        img_data = base64.b64decode(url[7:])
+                        media = types.InputMediaPhoto(
+                            media=types.BufferedInputFile(img_data, "result.png"),
+                            caption=cap, parse_mode=cap_parse,
+                        )
                     else:
-                        await message.reply_photo(photo=url, caption=caption, parse_mode=cap_parse)
-                    sent = True
-                except Exception:
-                    pass
-            if not sent:
-                await pending.edit_text("图片发送失败，请稍后再试。")
-            else:
-                try:
-                    await pending.delete()
+                        media = types.InputMediaPhoto(
+                            media=url, caption=cap, parse_mode=cap_parse,
+                        )
+                    await pending.edit_media(media=media)
                 except Exception:
                     try:
-                        tag = f"📡 {model_name}" if model_name else "✅"
+                        await message.reply_photo(
+                            photo=url, caption=cap, parse_mode=cap_parse,
+                        )
+                    except Exception:
+                        await pending.edit_caption(
+                            caption="图片发送失败，请稍后再试。",
+                        )
+            else:
+                # Pending is text → send new photo, edit pending to tag
+                try:
+                    if url.startswith("base64:"):
+                        img_data = base64.b64decode(url[7:])
+                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                            f.write(img_data)
+                            f.flush()
+                            await message.reply_photo(
+                                photo=types.FSInputFile(f.name),
+                                caption=cap, parse_mode=cap_parse,
+                            )
+                    else:
+                        await message.reply_photo(
+                            photo=url, caption=cap, parse_mode=cap_parse,
+                        )
+                    tag = f"📡 {model_name}" if model_name else "✅"
+                    try:
                         await pending.edit_text(tag)
                     except Exception:
                         pass
-        else:
-            # Text response (HTML blockquote) + model tag
-            full = content + model_tag
-            try:
-                await pending.edit_text(full, parse_mode=ParseMode.HTML)
-            except Exception:
-                # Fallback: if HTML parsing fails, send plain text
-                plain = (
-                    content.replace("<blockquote expandable>", "")
-                    .replace("</blockquote>", "")
-                )
-                if model_name:
-                    plain += f"\n📡 {model_name}"
-                try:
-                    await pending.edit_text(plain)
                 except Exception:
-                    await message.reply(full, parse_mode=ParseMode.HTML)
-            bot_reply_id = pending.message_id
+                    await pending.edit_text("图片发送失败，请稍后再试。")
+        else:
+            # Text response
+            full = content + model_tag
+            if is_image_intent:
+                # Pending is photo → can't edit to text, delete + send new
+                try:
+                    await pending.delete()
+                except Exception:
+                    pass
+                try:
+                    sent = await message.reply(full, parse_mode=ParseMode.HTML)
+                except Exception:
+                    plain = (
+                        content.replace("<blockquote expandable>", "")
+                        .replace("</blockquote>", "")
+                    )
+                    if model_name:
+                        plain += f"\n📡 {model_name}"
+                    sent = await message.reply(plain)
+                bot_reply_id = sent.message_id
+            else:
+                # Pending is text → edit in place
+                try:
+                    await pending.edit_text(full, parse_mode=ParseMode.HTML)
+                except Exception:
+                    plain = (
+                        content.replace("<blockquote expandable>", "")
+                        .replace("</blockquote>", "")
+                    )
+                    if model_name:
+                        plain += f"\n📡 {model_name}"
+                    try:
+                        await pending.edit_text(plain)
+                    except Exception:
+                        await message.reply(full, parse_mode=ParseMode.HTML)
+                bot_reply_id = pending.message_id
     except Exception:
         # Ultimate fallback
         plain = (
@@ -273,6 +341,8 @@ async def on_ai_bot_mention(message: types.Message):
         if len(plain) > 4096:
             plain = plain[:4093] + "..."
         try:
+            if is_image_intent:
+                await pending.delete()
             await pending.edit_text(plain)
         except Exception:
             await message.reply(plain)
