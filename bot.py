@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 def _register_routers(dp: Dispatcher):
     from handlers.start import router as start_router
     from handlers.company import router as company_router
+    from handlers.company_ops import router as company_ops_router
+    from handlers.company_employees import router as company_employees_router
     from handlers.shareholder import router as shareholder_router
     from handlers.research import router as research_router
     from handlers.product import router as product_router
@@ -43,6 +45,8 @@ def _register_routers(dp: Dispatcher):
 
     dp.include_router(start_router)
     dp.include_router(company_router)
+    dp.include_router(company_ops_router)
+    dp.include_router(company_employees_router)
     dp.include_router(shareholder_router)
     dp.include_router(research_router)
     dp.include_router(product_router)

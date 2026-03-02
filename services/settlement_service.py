@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from db.models import Company, DailyReport, Product
-from services.company_service import add_funds, update_daily_revenue, get_company_type_info
+from services.company_service import add_funds, calc_employee_income, update_daily_revenue, get_company_type_info
 from services.cooperation_service import get_cooperation_bonus
 from services.dividend_service import distribute_dividends
 from services.realestate_service import get_total_estate_income
@@ -22,7 +22,7 @@ from services.operations_service import (
     get_market_trend,
     get_operation_multipliers,
     get_or_create_profile,
-    maybe_regulation_fine,
+    run_regulation_audit,
     save_recent_events,
     settle_profile_daily,
 )
@@ -121,6 +121,10 @@ async def settle_company(session: AsyncSession, company: Company) -> tuple[Daily
     type_income_bonus = type_info.get("income_bonus", 0.0) if type_info else 0.0
     type_income = int(product_income * type_income_bonus)
 
+    # 7. Employee workforce income (人力产出收益)
+    emp_base_output, emp_efficiency_bonus = calc_employee_income(company.employee_count, product_income)
+    employee_income = emp_base_output + emp_efficiency_bonus
+
     # Total gross
     total_income = (
         product_income
@@ -132,6 +136,7 @@ async def settle_company(session: AsyncSession, company: Company) -> tuple[Daily
         + shop_buff_income
         + totalwar_buff_income
         + type_income
+        + employee_income
     )
 
     # Quest progress for daily_revenue and employee_count
@@ -160,7 +165,8 @@ async def settle_company(session: AsyncSession, company: Company) -> tuple[Daily
         social_insurance,
         now_utc,
     )
-    fine = maybe_regulation_fine(profile, total_income, now_utc)
+    reg_audit = run_regulation_audit(profile, total_income, now_utc)
+    fine = int(reg_audit["fine"])
     operating_cost = (
         base_operating
         + tax
@@ -178,7 +184,7 @@ async def settle_company(session: AsyncSession, company: Company) -> tuple[Daily
     if profit != 0:
         success = await add_funds(session, company.id, profit)
         if not success and profit < 0:
-            # 亏损超过现有资金，将资金清零
+            # 亏损超过现有积分，将积分清零
             old_ver = company.version
             await session.execute(
                 update(Company)
@@ -201,8 +207,19 @@ async def settle_company(session: AsyncSession, company: Company) -> tuple[Daily
         event_messages.append(
             f"📉 行业景气压制：{market['label']}（营收{(market['income_mult'] - 1.0) * 100:.0f}%）"
         )
-    if fine > 0:
-        event_messages.append(f"⚖️ 合规罚款触发：-{fine:,} 积分")
+    sampled_hours = int(reg_audit["sampled_hours"])
+    overtime_hours = int(reg_audit["overtime_hours"])
+    if overtime_hours > 0:
+        if fine > 0:
+            event_messages.append(
+                f"🛂 工时抽检：{sampled_hours}h（超时{overtime_hours}h），重罚 -{fine:,} 积分"
+            )
+        else:
+            event_messages.append(
+                f"🛂 工时抽检：{sampled_hours}h（超时{overtime_hours}h），本次未触发处罚"
+            )
+    elif fine > 0:
+        event_messages.append(f"⚖️ 合规抽检处罚：-{fine:,} 积分")
     if roadshow_penalty_amount > 0:
         event_messages.append(
             f"🎭 路演翻车反噬：当日营收 -{int(roadshow_penalty_rate * 100)}% "
@@ -222,6 +239,7 @@ async def settle_company(session: AsyncSession, company: Company) -> tuple[Daily
         company_id=company.id,
         date=today,
         product_income=product_income,
+        employee_income=employee_income,
         cooperation_bonus=cooperation_bonus,
         realestate_income=realestate_income,
         reputation_buff_income=reputation_buff_income,
@@ -296,6 +314,7 @@ def format_daily_report(company: Company, report: DailyReport, events: list[str]
         f"日期: {report.date}",
         f"{'─' * 24}",
         f"产品收入: {fmt_traffic(report.product_income)}",
+        f"👷 人力产出: +{fmt_traffic(report.employee_income)}",
         f"合作加成: +{fmt_traffic(report.cooperation_bonus)}",
         f"地产收入: +{fmt_traffic(report.realestate_income)}",
         f"声望加成: +{fmt_traffic(report.reputation_buff_income)}",

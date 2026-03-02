@@ -9,7 +9,7 @@ from keyboards.menus import main_menu_kb, tag_kb
 from services.ad_service import get_active_ad_info, get_ad_tiers, buy_ad, cancel_ad
 from services.company_service import add_funds, get_company_by_id
 from services.user_service import get_user_by_tg_id
-from handlers.company import _refresh_company_view
+from handlers.company_helpers import _refresh_company_view
 
 router = Router()
 
@@ -78,7 +78,7 @@ async def cb_buy_ad(callback: types.CallbackQuery):
                 await callback.answer("只有公司老板才能购买广告", show_alert=True)
                 return
 
-            # 先检查资金是否足够，再购买广告（原子性保证）
+            # 先检查积分是否足够，再购买广告（原子性保证）
             from services.ad_service import AD_TIERS
             tier = next((t for t in AD_TIERS if t["key"] == tier_key), None)
             if not tier:
@@ -88,13 +88,13 @@ async def cb_buy_ad(callback: types.CallbackQuery):
             cost = tier["cost"]
             fund_ok = await add_funds(session, company_id, -cost)
             if not fund_ok:
-                await callback.answer(f"公司资金不足，需要 {cost:,} 积分", show_alert=True)
+                await callback.answer(f"公司积分不足，需要 {cost:,} 积分", show_alert=True)
                 return
 
-            # 资金扣除成功后再购买广告
+            # 积分扣除成功后再购买广告
             ok, msg, _ = await buy_ad(company_id, tier_key)
             if not ok:
-                # 回滚资金
+                # 回滚积分
                 await add_funds(session, company_id, cost)
                 await callback.answer(msg, show_alert=True)
                 return

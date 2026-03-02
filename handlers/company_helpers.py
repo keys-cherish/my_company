@@ -1,0 +1,502 @@
+"""公司共享函数/常量/FSM状态 — 从 handlers/company.py 提取。"""
+
+from __future__ import annotations
+
+import datetime as dt
+
+from aiogram import types
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from sqlalchemy import select, func as sqlfunc
+
+from cache.redis_client import get_redis
+from config import settings as cfg
+from db.engine import async_session
+from db.models import DailyReport, Product, ResearchProgress, Shareholder, User
+from keyboards.menus import company_detail_kb, tag_kb
+from services.ad_service import get_ad_boost
+from services.battle_service import get_company_revenue_debuff
+from services.company_service import (
+    get_company_by_id,
+    get_company_employee_limit,
+    get_company_type_info,
+    get_company_valuation,
+    get_level_info,
+    get_level_revenue_bonus,
+    load_company_types,
+)
+from services.cooperation_service import get_cooperation_bonus
+from services.operations_service import (
+    INSURANCE_LEVELS,
+    OFFICE_LEVELS,
+    TRAINING_LEVELS,
+    WORK_HOUR_OPTIONS,
+    bar10,
+    calc_extra_operating_costs,
+    ethics_rating,
+    get_market_trend,
+    get_operation_multipliers,
+    get_or_create_profile,
+    get_training_info,
+    load_recent_events,
+    reputation_rating,
+)
+from services.realestate_service import get_total_estate_income
+from services.research_service import (
+    get_effective_research_duration_seconds,
+    get_in_progress_research,
+    get_tech_tree_display,
+    sync_research_progress_if_due,
+)
+from services.shop_service import get_income_buff_multiplier
+from services.user_service import get_user_by_tg_id
+from utils.formatters import fmt_duration, fmt_quota, fmt_traffic, reputation_buff_multiplier
+from utils.panel_owner import mark_panel
+from utils.timezone import naive_utc_to_bj
+
+
+# ── FSM 状态组 ────────────────────────────────────────
+
+class CreateCompanyState(StatesGroup):
+    waiting_type = State()
+    waiting_name = State()
+
+
+class RenameCompanyState(StatesGroup):
+    waiting_new_name = State()
+
+
+# ── 改名常量 ──────────────────────────────────────────
+
+RENAME_COST_RATE = 0.05  # 改名费用 = 公司积分 * 5%
+RENAME_MIN_COST = 5000   # 最低5000积分
+RENAME_REVENUE_PENALTY = 0.50  # 改名当日营收降低50%
+RENAME_COOLDOWN = 86400  # 改名冷却 24小时
+
+
+# ── 共享函数 ──────────────────────────────────────────
+
+async def _safe_edit_or_send(callback: types.CallbackQuery, text: str, reply_markup=None):
+    """Prefer editing current panel; only send new message when edit is impossible."""
+    try:
+        await callback.message.edit_text(text, reply_markup=reply_markup)
+        return
+    except TelegramBadRequest as e:
+        # Avoid duplicate panels when user reopens same page quickly.
+        if "message is not modified" in str(e).lower():
+            return
+    except Exception:
+        # Fall through to send a fresh panel.
+        pass
+
+    sent = await callback.message.answer(text, reply_markup=reply_markup)
+    await mark_panel(sent.chat.id, sent.message_id, callback.from_user.id)
+
+
+async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    """加载公司数据并返回 (text, keyboard)，供多个handler复用。"""
+    async with async_session() as session:
+        company = await get_company_by_id(session, company_id)
+        if not company:
+            return "公司不存在", InlineKeyboardMarkup(inline_keyboard=[])
+        user = await get_user_by_tg_id(session, tg_id)
+        valuation = await get_company_valuation(session, company)
+        is_owner = user and company.owner_id == user.id
+        owner = await session.get(User, company.owner_id)
+
+        sh_count = (await session.execute(
+            select(sqlfunc.count()).where(Shareholder.company_id == company_id)
+        )).scalar()
+        products = (await session.execute(
+            select(Product).where(Product.company_id == company_id).order_by(Product.quality.desc(), Product.id.asc())
+        )).scalars().all()
+        prod_count = len(products)
+        tech_count = (await session.execute(
+            select(sqlfunc.count()).where(
+                ResearchProgress.company_id == company_id,
+                ResearchProgress.status == "completed",
+            )
+        )).scalar()
+        estate_income = await get_total_estate_income(session, company_id)
+        coop_bonus_rate = await get_cooperation_bonus(session, company_id)
+        battle_debuff_rate = await get_company_revenue_debuff(company_id)
+        ad_boost_rate = await get_ad_boost(company_id)
+        shop_buff_mult = await get_income_buff_multiplier(company_id)
+
+        # Check rename penalty from Redis
+        _r = await get_redis()
+        _rename_pen_str = await _r.get(f"rename_penalty:{company_id}")
+        rename_penalty_rate = float(_rename_pen_str) if _rename_pen_str else 0.0
+        profile = await get_or_create_profile(session, company_id)
+        # 获取进行中的科研
+        await sync_research_progress_if_due(session, company_id)
+        in_progress_research = await get_in_progress_research(session, company_id)
+
+    type_info = get_company_type_info(company.company_type)
+    type_display = f"{type_info['emoji']} {type_info['name']}" if type_info else company.company_type
+
+    level_info = get_level_info(company.level)
+    level_name = level_info["name"] if level_info else f"Lv.{company.level}"
+    level_rev_bonus = get_level_revenue_bonus(company.level)
+    max_employees = get_company_employee_limit(company.level, company.company_type)
+
+    now_utc = dt.datetime.now(dt.UTC)
+    market = get_market_trend(company, now_utc)
+    multipliers = get_operation_multipliers(profile, now_utc)
+    product_income = int(company.daily_revenue * multipliers["income_mult"] * market["income_mult"])
+    if battle_debuff_rate > 0:
+        product_income = max(0, int(product_income * (1.0 - battle_debuff_rate)))
+    if rename_penalty_rate > 0:
+        product_income = max(0, int(product_income * (1.0 - rename_penalty_rate)))
+    cooperation_bonus = int(product_income * coop_bonus_rate)
+    rep_multiplier = reputation_buff_multiplier(owner.reputation) if owner else 1.0
+    reputation_buff_income = int(product_income * (rep_multiplier - 1.0))
+    ad_boost_income = int(product_income * ad_boost_rate)
+    shop_buff_income = int(product_income * (shop_buff_mult - 1.0))
+    type_income_bonus = type_info.get("income_bonus", 0.0) if type_info else 0.0
+    type_income = int(product_income * type_income_bonus)
+    estimated_income = (
+        product_income
+        + level_rev_bonus
+        + cooperation_bonus
+        + estate_income
+        + reputation_buff_income
+        + ad_boost_income
+        + shop_buff_income
+        + type_income
+    )
+    tax = int(estimated_income * cfg.tax_rate)
+    salary_cost = company.employee_count * cfg.employee_salary_base
+    social_insurance = int(salary_cost * cfg.social_insurance_rate)
+    type_cost_bonus = type_info.get("cost_bonus", 0.0) if type_info else 0.0
+    base_operating = int(
+        (int(estimated_income * cfg.daily_operating_cost_pct) + salary_cost + social_insurance)
+        * (1.0 + type_cost_bonus)
+    )
+    extra_costs = calc_extra_operating_costs(
+        profile,
+        company.employee_count,
+        estimated_income,
+        salary_cost,
+        social_insurance,
+        now_utc,
+    )
+    estimated_cost = (
+        base_operating
+        + tax
+        + extra_costs["office_cost"]
+        + extra_costs["training_cost"]
+        + extra_costs["regulation_cost"]
+        + extra_costs["insurance_cost"]
+        + extra_costs["work_cost_adjust"]
+        + extra_costs["culture_maintenance"]
+    )
+    estimated_profit = estimated_income - estimated_cost
+
+    # 科研进度文本
+    research_block = ""
+    if in_progress_research:
+        tree = {t["tech_id"]: t for t in get_tech_tree_display()}
+        now = dt.datetime.utcnow()
+        rlines = []
+        for rp in in_progress_research:
+            tech_info = tree.get(rp.tech_id, {})
+            name = tech_info.get("name", rp.tech_id)
+            duration_sec = tech_info.get("duration_seconds", 3600)
+            started = rp.started_at.replace(tzinfo=None) if rp.started_at.tzinfo else rp.started_at
+            elapsed = (now - started).total_seconds()
+            remaining = max(0, int(duration_sec - elapsed))
+            if remaining > 0:
+                rlines.append(f"  • {name} — 剩余 {fmt_duration(remaining)}")
+            else:
+                rlines.append(f"  • {name} — 即将完成")
+        research_block = "⏳ 研究中:\n" + "\n".join(rlines) + "\n"
+
+    work_info = WORK_HOUR_OPTIONS.get(profile.work_hours, WORK_HOUR_OPTIONS[8])
+    office_info = OFFICE_LEVELS.get(profile.office_level, OFFICE_LEVELS["standard"])
+    training_info = TRAINING_LEVELS.get(profile.training_level, TRAINING_LEVELS["none"])
+    insurance_info = INSURANCE_LEVELS.get(profile.insurance_level, INSURANCE_LEVELS["basic"])
+    training_line = f"🏅 培训中：{training_info['name']}（×{multipliers['training']['income_mult']:.2f}）"
+    if profile.training_expires_at and profile.training_level != "none":
+        expire_bj = naive_utc_to_bj(profile.training_expires_at).strftime("%m-%d %H:%M")
+        training_line = f"🏅 培训中：{training_info['name']}（×{multipliers['training']['income_mult']:.2f}，到期 {expire_bj}）"
+
+    products_block: list[str] = []
+    if products:
+        for p in products[:3]:
+            icon = "🚀" if p.quality >= 90 else "🔬"
+            products_block.append(f"  {icon} {p.name} ⭐{p.quality} 💰{fmt_quota(p.daily_income)}/日")
+        if len(products) > 3:
+            products_block.append(f"  ...还有 {len(products) - 3} 个产品")
+    else:
+        products_block.append("  暂无产品")
+
+    recent_events = await load_recent_events(company_id, limit=3)
+    events_block = [f"  · {e}" for e in recent_events] if recent_events else ["  · 暂无事件"]
+    rep_value = owner.reputation if owner else 0
+    if market["income_mult"] > 1.0:
+        market_effect = f"（景气加成 +{(market['income_mult'] - 1.0) * 100:.0f}%）"
+    elif market["income_mult"] < 1.0:
+        market_effect = f"（景气减成 {(market['income_mult'] - 1.0) * 100:.0f}%）"
+    else:
+        market_effect = "（景气无加成）"
+
+    text = (
+        f"🏢 {company.name}\n\n"
+        f"🖥️ 行业：{type_display} {market['label']} {market_effect}\n"
+        f"📊 等级：Lv.{company.level} {level_name}\n"
+        f"⭐ 声望：{rep_value}（评级 {reputation_rating(rep_value)}）\n"
+        f"👥 员工：{company.employee_count}/{max_employees}\n"
+        f"💰 积分余额：{fmt_quota(company.total_funds)}\n"
+        f"😐 道德：{profile.ethics}/100 [{bar10(profile.ethics)}] {ethics_rating(profile.ethics)}\n\n"
+        f"📈 预估日营收：{fmt_quota(estimated_income)}\n"
+        f"  产品收入：{fmt_quota(product_income)} | 地产收入：{fmt_quota(estate_income)}\n"
+        f"📉 预估日成本：{fmt_quota(estimated_cost)}\n"
+        f"💵 预估日净利：{'+' if estimated_profit >= 0 else ''}{fmt_quota(estimated_profit)}\n\n"
+        f"⏰ 工时：{profile.work_hours}h {work_info['label']}（营收×{work_info['income_mult']:.1f}）\n"
+        f"🌆 办公：{office_info['name']}（营收×{office_info['income_mult']:.1f}）\n"
+        f"{training_line}\n"
+        f"👑 保险：{insurance_info['name']}（罚款-{int(insurance_info['fine_reduction'] * 100)}%）\n"
+        f"🎭 文化：{profile.culture}/100（营收+{profile.culture/10:.1f}%，风险-{profile.culture * 0.3:.1f}%）\n"
+        f"🛂 监管：{profile.regulation_pressure}/100（超8h自动涨，≤8h自动降）\n"
+        f"🤝 合作Buff：+{coop_bonus_rate*100:.0f}%（当日）\n"
+        f"⚔️ 商战Debuff：-{battle_debuff_rate*100:.0f}%\n"
+        f"{'✏️ 改名Debuff：-' + str(int(rename_penalty_rate*100)) + '%（结算后恢复）' + chr(10) if rename_penalty_rate > 0 else ''}"
+        f"🏷 估值：{fmt_quota(valuation)}\n"
+        f"👥 股东:{sh_count} | 🔬 科技:{tech_count}\n"
+        f"{'─' * 24}\n"
+        f"{research_block}"
+        f"📦 产品（{prod_count}个）：\n"
+        f"{chr(10).join(products_block)}\n\n"
+        f"📋 最近事件：\n"
+        f"{chr(10).join(events_block)}\n"
+    )
+    return text, company_detail_kb(company_id, is_owner, tg_id=tg_id)
+
+
+async def _refresh_company_view(callback: types.CallbackQuery, company_id: int):
+    """操作后刷新公司面板消息。"""
+    text, kb = await render_company_detail(company_id, callback.from_user.id)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass  # 消息未变化时edit会抛异常，忽略
+
+
+def _finance_detail_kb(company_id: int, tg_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔄 刷新明细", callback_data=f"company:finance:{company_id}"),
+            InlineKeyboardButton(text="🔙 返回公司", callback_data=f"company:view:{company_id}"),
+        ],
+    ])
+    return tag_kb(kb, tg_id)
+
+
+async def render_company_finance_detail(company_id: int, tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Render estimated income/cost breakdown plus latest settlement snapshot."""
+    async with async_session() as session:
+        company = await get_company_by_id(session, company_id)
+        if not company:
+            return "公司不存在", InlineKeyboardMarkup(inline_keyboard=[])
+
+        user = await get_user_by_tg_id(session, tg_id)
+        if not user or company.owner_id != user.id:
+            return "只有公司老板可以查看收支明细", company_detail_kb(company_id, False, tg_id=tg_id)
+
+        owner = await session.get(User, company.owner_id)
+        type_info = get_company_type_info(company.company_type)
+        estate_income = await get_total_estate_income(session, company_id)
+        coop_bonus_rate = await get_cooperation_bonus(session, company_id)
+        battle_debuff_rate = await get_company_revenue_debuff(company_id)
+        ad_boost_rate = await get_ad_boost(company_id)
+        shop_buff_mult = await get_income_buff_multiplier(company_id)
+        profile = await get_or_create_profile(session, company_id)
+
+        latest_report = (
+            await session.execute(
+                select(DailyReport)
+                .where(DailyReport.company_id == company_id)
+                .order_by(DailyReport.id.desc())
+                .limit(1)
+            )
+        ).scalars().first()
+
+    # Estimated income (same core formula as settlement, excluding one-shot random events).
+    now_utc = dt.datetime.now(dt.UTC)
+    market = get_market_trend(company, now_utc)
+    multipliers = get_operation_multipliers(profile, now_utc)
+    product_income = int(company.daily_revenue * multipliers["income_mult"] * market["income_mult"])
+    if battle_debuff_rate > 0:
+        product_income = max(0, int(product_income * (1.0 - battle_debuff_rate)))
+
+    level_revenue_bonus = get_level_revenue_bonus(company.level)
+    cooperation_bonus = int(product_income * coop_bonus_rate)
+    rep_multiplier = reputation_buff_multiplier(owner.reputation) if owner else 1.0
+    reputation_buff_income = int(product_income * (rep_multiplier - 1.0))
+    ad_boost_income = int(product_income * ad_boost_rate)
+    shop_buff_income = int(product_income * (shop_buff_mult - 1.0))
+    totalwar_buff_income = 0  # uncertain at panel time; settlement applies Redis temporary buff.
+    type_income_bonus = type_info.get("income_bonus", 0.0) if type_info else 0.0
+    type_income = int(product_income * type_income_bonus)
+
+    estimated_income = (
+        product_income
+        + level_revenue_bonus
+        + cooperation_bonus
+        + estate_income
+        + reputation_buff_income
+        + ad_boost_income
+        + shop_buff_income
+        + totalwar_buff_income
+        + type_income
+    )
+
+    # Estimated costs.
+    tax = int(estimated_income * cfg.tax_rate)
+    salary_cost = company.employee_count * cfg.employee_salary_base
+    social_insurance = int(salary_cost * cfg.social_insurance_rate)
+    overhead_cost = int(estimated_income * cfg.daily_operating_cost_pct)
+    type_cost_bonus = type_info.get("cost_bonus", 0.0) if type_info else 0.0
+    pre_type_cost = overhead_cost + salary_cost + social_insurance
+    type_cost_adjust = int(pre_type_cost * (1.0 + type_cost_bonus)) - pre_type_cost
+
+    extra_costs = calc_extra_operating_costs(
+        profile,
+        company.employee_count,
+        estimated_income,
+        salary_cost,
+        social_insurance,
+        now_utc,
+    )
+    estimated_cost = (
+        pre_type_cost
+        + type_cost_adjust
+        + tax
+        + extra_costs["office_cost"]
+        + extra_costs["training_cost"]
+        + extra_costs["regulation_cost"]
+        + extra_costs["insurance_cost"]
+        + extra_costs["work_cost_adjust"]
+        + extra_costs["culture_maintenance"]
+    )
+    estimated_profit = estimated_income - estimated_cost
+
+    lines = [
+        f"📒 {company.name} — 收支明细（预估）",
+        "─" * 24,
+        "分红说明: 每日结算后按股权自动发放到个人积分",
+        "",
+        "【收入目录】",
+        f"产品基础收入: {fmt_traffic(product_income)}",
+        f"等级固定加成: +{fmt_traffic(level_revenue_bonus)}",
+        f"合作加成: +{fmt_traffic(cooperation_bonus)}",
+        f"地产收入: +{fmt_traffic(estate_income)}",
+        f"声望加成: +{fmt_traffic(reputation_buff_income)}",
+        f"广告加成: +{fmt_traffic(ad_boost_income)}",
+        f"商城加成: +{fmt_traffic(shop_buff_income)}",
+        f"公司类型加成: +{fmt_traffic(type_income)}",
+        f"预估总收入: {fmt_traffic(estimated_income)}",
+        "",
+        "【成本目录】",
+        f"基础运营(比例): -{fmt_traffic(overhead_cost)}",
+        f"员工薪资: -{fmt_traffic(salary_cost)}",
+        f"社保支出: -{fmt_traffic(social_insurance)}",
+        f"公司类型成本修正: {'+' if type_cost_adjust >= 0 else ''}{fmt_traffic(type_cost_adjust)}",
+        f"税费: -{fmt_traffic(tax)}",
+        f"办公成本: -{fmt_traffic(extra_costs['office_cost'])}",
+        f"培训成本: -{fmt_traffic(extra_costs['training_cost'])}",
+        f"监管成本: -{fmt_traffic(extra_costs['regulation_cost'])}",
+        f"保险成本: -{fmt_traffic(extra_costs['insurance_cost'])}",
+        f"工时成本修正: {'+' if extra_costs['work_cost_adjust'] >= 0 else ''}{fmt_traffic(extra_costs['work_cost_adjust'])}",
+        f"文化维护: -{fmt_traffic(extra_costs['culture_maintenance'])}",
+        "随机罚款: 每日抽检工时，抽检>8h会触发重罚（不计入本预估）",
+        f"预估总成本: {fmt_traffic(estimated_cost)}",
+        "",
+        f"💵 预估净利润: {'+' if estimated_profit >= 0 else ''}{fmt_traffic(estimated_profit)}",
+    ]
+
+    if latest_report:
+        latest_profit = latest_report.total_income - latest_report.operating_cost
+        lines += [
+            "",
+            "【最近一次结算】",
+            f"日期: {latest_report.date}",
+            f"总收入: {fmt_traffic(latest_report.total_income)}",
+            f"总成本: -{fmt_traffic(latest_report.operating_cost)}",
+            f"净利润: {'+' if latest_profit >= 0 else ''}{fmt_traffic(latest_profit)}",
+            f"分红支出: -{fmt_traffic(latest_report.dividend_paid)}",
+        ]
+    else:
+        lines += [
+            "",
+            "【最近一次结算】",
+            "暂无历史结算记录。",
+        ]
+
+    return "\n".join(lines), _finance_detail_kb(company_id, tg_id)
+
+
+async def _start_company_type_selection(message: types.Message, state: FSMContext, prefix: str = ""):
+    """共用的公司类型选择面板。"""
+    types_data = load_company_types()
+    buttons = [
+        [InlineKeyboardButton(
+            text=f"{info['emoji']} {info['name']}",
+            callback_data=f"company:type:{key}",
+        )]
+        for key, info in types_data.items()
+    ]
+    text = (
+        f"{prefix}"
+        "🏢 创建公司\n选择公司类型:\n\n" +
+        "\n".join(f"{info['emoji']} {info['name']} — {info['description']}" for info in types_data.values())
+    )
+    sent = await message.answer(
+        text,
+        reply_markup=tag_kb(
+            InlineKeyboardMarkup(inline_keyboard=buttons),
+            message.from_user.id,
+        ),
+    )
+    await mark_panel(message.chat.id, sent.message_id, message.from_user.id)
+    await state.set_state(CreateCompanyState.waiting_type)
+
+
+def _ops_menu_kb(company_id: int, tg_id: int, training_active: bool = False) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(text="6h 轻松", callback_data=f"ops:work:{company_id}:6"),
+            InlineKeyboardButton(text="8h 正常", callback_data=f"ops:work:{company_id}:8"),
+            InlineKeyboardButton(text="10h 冲刺", callback_data=f"ops:work:{company_id}:10"),
+            InlineKeyboardButton(text="12h 高压", callback_data=f"ops:work:{company_id}:12"),
+        ],
+        [
+            InlineKeyboardButton(text="🏢 升级办公", callback_data=f"ops:cycle:{company_id}:office"),
+            InlineKeyboardButton(text="👑 升级保险", callback_data=f"ops:cycle:{company_id}:insurance"),
+        ],
+        [
+            InlineKeyboardButton(text="🎭 文化+8", callback_data=f"ops:cycle:{company_id}:culture"),
+            InlineKeyboardButton(text="😐 道德+6", callback_data=f"ops:cycle:{company_id}:ethics"),
+            InlineKeyboardButton(text="🛂 监管说明", callback_data=f"ops:cycle:{company_id}:regulation"),
+        ],
+        [
+            InlineKeyboardButton(text="🏅 基础(×1.12)", callback_data=f"ops:train:{company_id}:basic"),
+            InlineKeyboardButton(text="🏅 实训(×1.30)", callback_data=f"ops:train:{company_id}:pro"),
+            InlineKeyboardButton(text="🏅 特训(×1.50)", callback_data=f"ops:train:{company_id}:elite"),
+        ],
+    ]
+    if training_active:
+        rows.append([InlineKeyboardButton(text="⛔ 停止培训", callback_data=f"ops:train:{company_id}:none")])
+    rows.append([InlineKeyboardButton(text="🔙 返回公司", callback_data=f"company:view:{company_id}")])
+    return tag_kb(InlineKeyboardMarkup(inline_keyboard=rows), tg_id)
+
+
+async def _check_training_active(company_id: int) -> bool:
+    """Check if training is currently active for a company."""
+    async with async_session() as session:
+        profile = await get_or_create_profile(session, company_id)
+        info = get_training_info(profile, dt.datetime.now(dt.UTC))
+        return info["active"]

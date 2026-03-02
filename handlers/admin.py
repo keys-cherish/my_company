@@ -73,6 +73,18 @@ async def cb_buff_list(callback: types.CallbackQuery):
     type_research_buff = type_info.get("research_speed_bonus", 0) * 100 if type_info else 0
     type_cost_buff = type_info.get("cost_bonus", 0) * 100 if type_info else 0
 
+    # 改名惩罚 & 路演翻车 & 商战Debuff (from Redis)
+    from cache.redis_client import get_redis
+    _r = await get_redis()
+    _rename_str = await _r.get(f"rename_penalty:{company_id}")
+    rename_pen = float(_rename_str) * 100 if _rename_str else 0
+    _roadshow_str = await _r.get(f"roadshow_penalty:{company_id}")
+    roadshow_pen = float(_roadshow_str) * 100 if _roadshow_str else 0
+    from services.battle_service import get_company_revenue_debuff
+    battle_debuff = await get_company_revenue_debuff(company_id) * 100
+    _totalwar_str = await _r.get(f"totalwar_buff:{company_id}")
+    totalwar_buff = float(_totalwar_str) * 100 if _totalwar_str else 0
+
     lines = [
         f"📋 {company.name} — Buff一览",
         "─" * 24,
@@ -115,6 +127,22 @@ async def cb_buff_list(callback: types.CallbackQuery):
         "─" * 24,
         "注: 合作Buff可叠加(上限50%，满级100%)，其他取最高值",
     ]
+
+    # Debuff section (only show if any active)
+    debuff_lines: list[str] = []
+    if rename_pen > 0:
+        debuff_lines.append(f"  改名惩罚: -{rename_pen:.0f}%（结算后恢复）")
+    if roadshow_pen > 0:
+        debuff_lines.append(f"  路演翻车: -{roadshow_pen:.0f}%（结算后恢复）")
+    if battle_debuff > 0:
+        debuff_lines.append(f"  商战Debuff: -{battle_debuff:.0f}%")
+    if totalwar_buff > 0:
+        debuff_lines.append(f"  全面商战Buff: +{totalwar_buff:.0f}%")
+    if debuff_lines:
+        lines.insert(-2, "")
+        lines.insert(-2, "【当前Debuff/临时Buff】")
+        for dl in debuff_lines:
+            lines.insert(-2, dl)
 
     from keyboards.menus import company_detail_kb
     await callback.message.edit_text(
@@ -180,11 +208,11 @@ async def cmd_give_money(message: types.Message):
 
     args = (message.text or "").split(maxsplit=1)
     if len(args) < 2:
-        await message.answer("用法: 回复某人消息并发送 /company_give <金额>")
+        await message.answer("用法: 回复某人消息并发送 /company_give <积分>")
         return
 
     if not message.reply_to_message or not message.reply_to_message.from_user:
-        await message.answer("用法: 回复某人消息并发送 /company_give <金额>")
+        await message.answer("用法: 回复某人消息并发送 /company_give <积分>")
         return
 
     target = message.reply_to_message.from_user
@@ -196,11 +224,11 @@ async def cmd_give_money(message: types.Message):
     try:
         amount = int(amount_str)
     except ValueError:
-        await message.answer("❌ 金额必须是整数")
+        await message.answer("❌ 积分必须是整数")
         return
 
     if amount <= 0:
-        await message.answer("❌ 金额必须大于 0")
+        await message.answer("❌ 积分必须大于 0")
         return
 
     points_gain = max(1, amount // GIVE_MONEY_POINTS_DIVISOR)
@@ -273,7 +301,7 @@ async def cmd_welfare(message: types.Message):
     await message.answer(
         f"🎁 全服福利发放完成\n"
         f"{'─' * 24}\n"
-        f"发放金额: {fmt_currency(WELFARE_AMOUNT)} / 家\n"
+        f"发放积分: {fmt_currency(WELFARE_AMOUNT)} / 家\n"
         f"成功: {success} 家 / 共 {len(companies)} 家"
     )
 

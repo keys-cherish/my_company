@@ -45,6 +45,9 @@ MARKET_TRENDS: tuple[dict, ...] = (
     {"key": "rain", "label": "🌧️ 衰退", "income_mult": 0.88},
 )
 _MARKET_CYCLE_ANCHOR = dt.date(2026, 1, 1)
+LEGAL_WORK_HOURS = 8
+WORK_HOUR_AUDIT_VARIANCE = 1
+REGULATION_FINE_CAP_RATE = 0.75
 
 
 def _clamp(value: int, lower: int, upper: int) -> int:
@@ -180,15 +183,56 @@ def maybe_regulation_fine(
     income_total: int,
     now: dt.datetime,
 ) -> int:
+    """Backward-compatible wrapper: return only fine amount."""
+    return int(run_regulation_audit(profile, income_total, now)["fine"])
+
+
+def run_regulation_audit(
+    profile: CompanyOperationProfile,
+    income_total: int,
+    now: dt.datetime,
+) -> dict[str, int | float]:
+    """Run labor-hours regulation audit and return detailed result.
+
+    Mechanics:
+    - Randomly sample actual work-hours around configured hours.
+    - If sampled hours exceed legal threshold, risk and fine are escalated sharply.
+    - Higher regulation_pressure means stricter checks and stronger penalties.
+    """
     insurance = INSURANCE_LEVELS.get(profile.insurance_level, INSURANCE_LEVELS["basic"])
-    base_risk = 0.02 + max(0, 50 - profile.ethics) * 0.004 + profile.regulation_pressure * 0.0005
-    culture_risk_reduce = (profile.culture / 100) * 0.30
-    risk = max(0.01, min(0.85, base_risk * (1.0 - culture_risk_reduce)))
     rng = random.Random((now.toordinal() * 97) + profile.company_id)
+    sampled_hours = max(1, min(24, profile.work_hours + rng.randint(-WORK_HOUR_AUDIT_VARIANCE, WORK_HOUR_AUDIT_VARIANCE)))
+    overtime_hours = max(0, sampled_hours - LEGAL_WORK_HOURS)
+
+    base_risk = 0.02 + max(0, 50 - profile.ethics) * 0.004 + profile.regulation_pressure * 0.0005
+    overtime_risk_boost = overtime_hours * 0.10
+    culture_risk_reduce = (profile.culture / 100) * 0.30
+    risk = max(0.01, min(0.90, (base_risk + overtime_risk_boost) * (1.0 - culture_risk_reduce)))
     if rng.random() > risk:
-        return 0
+        return {
+            "fine": 0,
+            "sampled_hours": sampled_hours,
+            "overtime_hours": overtime_hours,
+            "risk": risk,
+        }
+
     fine_base = int(income_total * (0.015 + max(0, 45 - profile.ethics) / 1000))
-    return max(0, int(fine_base * (1.0 - insurance["fine_reduction"])))
+    overtime_component = int(income_total * (0.020 * overtime_hours))
+
+    # Higher pressure and overtime both amplify crackdown severity.
+    pressure_mult = 1.0 + profile.regulation_pressure * 0.006
+    overtime_mult = 1.0 + overtime_hours * 0.50
+    fine_raw = int((fine_base + overtime_component) * pressure_mult * overtime_mult)
+    fine_after_insurance = int(fine_raw * (1.0 - insurance["fine_reduction"]))
+    fine_cap = max(200, int(income_total * REGULATION_FINE_CAP_RATE))
+    fine = max(0, min(fine_after_insurance, fine_cap))
+
+    return {
+        "fine": fine,
+        "sampled_hours": sampled_hours,
+        "overtime_hours": overtime_hours,
+        "risk": risk,
+    }
 
 
 async def settle_profile_daily(
@@ -205,6 +249,30 @@ async def settle_profile_daily(
     if profile.training_level != "none" and not _is_training_active(profile, now):
         profile.training_level = "none"
         profile.training_expires_at = None
+
+    # ── 监管自动联动工时 ──
+    # 工时>8h: 每超1h监管+4，高压(12h)每日+16
+    # 工时≤8h: 每日自然降低-2，轻松(6h)额外-1
+    old_reg = profile.regulation_pressure
+    overtime = max(0, profile.work_hours - LEGAL_WORK_HOURS)
+    if overtime > 0:
+        reg_delta = overtime * 4
+        profile.regulation_pressure = _clamp(profile.regulation_pressure + reg_delta, 0, 100)
+        if profile.regulation_pressure > old_reg:
+            messages.append(
+                f"🛂 超时工作({profile.work_hours}h)引发监管关注："
+                f"监管+{profile.regulation_pressure - old_reg}"
+                f"（{old_reg}→{profile.regulation_pressure}）"
+            )
+    else:
+        reg_recover = 2 + (1 if profile.work_hours <= 6 else 0)
+        profile.regulation_pressure = _clamp(profile.regulation_pressure - reg_recover, 0, 100)
+        if profile.regulation_pressure < old_reg:
+            messages.append(
+                f"🛂 合规工时({profile.work_hours}h)，监管放松："
+                f"监管-{old_reg - profile.regulation_pressure}"
+                f"（{old_reg}→{profile.regulation_pressure}）"
+            )
 
     # Ethics <20: chance of employee attrition
     if profile.ethics < 20:
@@ -281,9 +349,8 @@ async def cycle_option(
         return True, f"企业道德提升至 {profile.ethics}/100"
 
     if field == "regulation":
-        profile.regulation_pressure = _clamp(profile.regulation_pressure + 8, 0, 100)
-        await session.flush()
-        return True, f"监管强度调整为 {profile.regulation_pressure}/100"
+        # Regulation is now auto-adjusted by work hours, not manually
+        return False, "监管压力由工时自动调节：超时自动涨，合规自动降"
 
     return False, "未知选项"
 
@@ -315,7 +382,7 @@ async def start_training(
     total_cost = int(company.employee_count * info["hourly_cost"] * info["duration_hours"])
     ok = await add_funds(session, company_id, -total_cost)
     if not ok:
-        return False, f"公司资金不足，培训需要 {total_cost:,} 积分"
+        return False, f"公司积分不足，培训需要 {total_cost:,} 积分"
     now = dt.datetime.utcnow()
     profile.training_level = level
     profile.training_expires_at = now + dt.timedelta(hours=info["duration_hours"])

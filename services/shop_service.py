@@ -68,6 +68,20 @@ async def buy_item(
     if await has_buff(company_id, item_key):
         return False, f"{item['name']} 效果仍在生效中"
 
+    # Research speed: escalating price + max 3 per research cycle
+    r = await get_redis()
+    if item_key == "speed_research":
+        accel_key = f"research_accel_count:{company_id}"
+        count_str = await r.get(accel_key)
+        accel_count = int(count_str) if count_str else 0
+        if accel_count >= 3:
+            return False, "本轮研发加速已达上限（最多3次），等当前研发完成后重置"
+        # Escalating price: base * 2^count (6000 → 12000 → 24000)
+        price = item["price"] * (2 ** accel_count)
+        if price_override is not None:
+            # Black market: apply same escalation ratio to discounted price
+            price = price_override * (2 ** accel_count)
+
     # Precision marketing: check roadshow cooldown
     if item_key == "precision_marketing":
         from services.roadshow_service import can_roadshow
@@ -87,10 +101,9 @@ async def buy_item(
 
     ok = await add_funds(session, company_id, -price)
     if not ok:
-        return False, f"公司资金不足，需要 {fmt_traffic(price)}"
+        return False, f"公司积分不足，需要 {fmt_traffic(price)}"
 
     # Apply buff
-    r = await get_redis()
     buff_key = f"buff:{company_id}:{item_key}"
 
     if item.get("one_time"):
@@ -105,6 +118,22 @@ async def buy_item(
         await _apply_research_speed(session, company_id)
         # Consume immediately
         await r.delete(buff_key)
+        # Increment acceleration count (TTL 24h, resets naturally)
+        accel_key = f"research_accel_count:{company_id}"
+        await r.incr(accel_key)
+        await r.expire(accel_key, 86400)
+        new_count = int(await r.get(accel_key) or 0)
+        remaining_uses = 3 - new_count
+        price_hint = ""
+        if remaining_uses > 0:
+            next_price = item["price"] * (2 ** new_count)
+            price_hint = f"\n下次加速费用：{fmt_traffic(next_price)}"
+        return True, (
+            f"购买成功! {item['name']}（第{new_count}次）\n"
+            f"花费：{fmt_traffic(price)}\n"
+            f"{item['description']}\n"
+            f"剩余加速次数：{remaining_uses}/3{price_hint}"
+        )
 
     return True, f"购买成功! {item['name']}\n{item['description']}"
 
