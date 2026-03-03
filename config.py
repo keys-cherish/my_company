@@ -159,7 +159,6 @@ class Settings(BaseSettings):
     traffic_api_key: str = ""  # 外部接口认证密钥
     traffic_total_pool: int = 10_000_000  # 全局流量池总量
     traffic_daily_distribution: int = 100_000  # 每日可分配流量
-    traffic_exchange_rate: float = 1.0  # 外部积分兑换流量汇率
 
     # 管理员
     super_admin_tg_id: int = 0  # 兼容旧配置：单个超级管理员TG ID（高危命令）

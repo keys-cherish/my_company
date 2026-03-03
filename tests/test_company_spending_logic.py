@@ -22,10 +22,16 @@ class TestCompanySpendingLogic(AsyncDBTestCase):
 
         self._shop_redis_patcher = patch("services.shop_service.get_redis", new=_fake_get_redis)
         self._user_redis_patcher = patch("services.user_service.get_redis", new=_fake_get_redis)
+        self._roadshow_redis_patcher = patch("services.roadshow_service.get_redis", new=_fake_get_redis)
+        self._fundlog_redis_patcher = patch("services.fundlog_service.get_redis", new=_fake_get_redis)
         self._shop_redis_patcher.start()
         self._user_redis_patcher.start()
+        self._roadshow_redis_patcher.start()
+        self._fundlog_redis_patcher.start()
         self.addCleanup(self._shop_redis_patcher.stop)
         self.addCleanup(self._user_redis_patcher.stop)
+        self.addCleanup(self._roadshow_redis_patcher.stop)
+        self.addCleanup(self._fundlog_redis_patcher.stop)
 
     async def _new_user_and_company(self, session, tg_id: int, *, traffic: int, funds: int) -> tuple[User, Company]:
         user = User(tg_id=tg_id, tg_name=f"user-{tg_id}", traffic=traffic, reputation=100)
@@ -75,9 +81,12 @@ class TestCompanySpendingLogic(AsyncDBTestCase):
                 user, company = await self._new_user_and_company(
                     session, 6102, traffic=0, funds=1_000
                 )
-                with patch("services.research_service._load_tech_tree", return_value=tech_tree):
-                    ok, _msg = await start_research(session, company.id, user.id, "t1")
-                self.assertTrue(ok)
+                with (
+                    patch("services.research_service._load_tech_tree", return_value=tech_tree),
+                    patch("services.research_service.is_tech_allowed_for_company", return_value=True),
+                ):
+                    ok, msg = await start_research(session, company.id, user.id, "t1")
+                self.assertTrue(ok, msg=f"Research failed: {msg}")
 
                 await session.refresh(user)
                 await session.refresh(company)

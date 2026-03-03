@@ -61,7 +61,12 @@ class TestSettlementLogic(AsyncDBTestCase):
 
         return company
 
-    async def _settle_with_patches(self, session, company: Company):
+    async def _settle_with_patches(self, session, company: Company, extra_cost_override: dict | None = None):
+        default_extra = {
+            "office_cost": 0, "training_cost": 0, "regulation_cost": 0,
+            "insurance_cost": 0, "work_cost_adjust": 0, "culture_maintenance": 0,
+        }
+        extra = extra_cost_override or default_extra
         with patch("services.settlement_service.check_and_complete_research", new=AsyncMock(return_value=[])), \
             patch("services.settlement_service.get_cooperation_bonus", new=AsyncMock(return_value=0.0)), \
             patch("services.settlement_service.get_total_estate_income", new=AsyncMock(return_value=0)), \
@@ -69,7 +74,10 @@ class TestSettlementLogic(AsyncDBTestCase):
             patch("services.settlement_service.update_leaderboard", new=AsyncMock(return_value=None)), \
             patch("services.ad_service.get_ad_boost", new=AsyncMock(return_value=0.0)), \
             patch("services.shop_service.get_income_buff_multiplier", new=AsyncMock(return_value=1.0)), \
-            patch("services.settlement_service.get_company_revenue_debuff", new=AsyncMock(return_value=0.0)):
+            patch("services.settlement_service.get_company_revenue_debuff", new=AsyncMock(return_value=0.0)), \
+            patch("services.settlement_service.save_recent_events", new=AsyncMock(return_value=None)), \
+            patch("services.settlement_service.calc_extra_operating_costs", return_value=extra), \
+            patch("services.settlement_service.run_regulation_audit", return_value={"fine": 0, "sampled_hours": 8, "overtime_hours": 0, "risk": 0}):
             return await settle_company(session, company)
 
     async def test_negative_profit_should_reduce_company_funds_boundary(self):
@@ -79,12 +87,17 @@ class TestSettlementLogic(AsyncDBTestCase):
                     session=session,
                     tg_id=4001,
                     name="LossCo",
-                    funds=1_000,
+                    funds=100_000,
                     employee_count=10,
                     product_income=0,
                 )
                 initial_funds = company.total_funds
-                report, _events = await self._settle_with_patches(session, company)
+                # Force very high extra costs to guarantee a loss
+                big_extra = {
+                    "office_cost": 50_000, "training_cost": 0, "regulation_cost": 0,
+                    "insurance_cost": 0, "work_cost_adjust": 0, "culture_maintenance": 0,
+                }
+                report, _events = await self._settle_with_patches(session, company, extra_cost_override=big_extra)
 
                 profit = report.total_income - report.operating_cost
                 self.assertLess(profit, 0)

@@ -24,6 +24,8 @@ from commands import (
     CMD_RANK_COMPANY,
     CMD_START,
     CMD_WELFARE,
+    CMD_CHECKIN,
+    CMD_REDPACKET,
 )
 from config import settings
 from db.engine import async_session
@@ -52,6 +54,8 @@ BOT_COMMANDS = [
     BotCommand(command=CMD_GIVE_MONEY, description="超管发放积分（回复+积分）"),
     BotCommand(command=CMD_WELFARE, description="超管全服福利（每家100万）"),
     BotCommand(command="cp_slot", description="🎰 老虎机（每日奖励一次）"),
+    BotCommand(command=CMD_CHECKIN, description="🏢 每日打卡（连续签到领奖励）"),
+    BotCommand(command=CMD_REDPACKET, description="🧧 发红包（金额 个数）"),
 ]
 
 HELP_TEXT = (
@@ -77,8 +81,9 @@ HELP_TEXT = (
     "🗑 /company_dissolve — 注销公司(24h冷却)\n"
     "/company_admin <密钥> — 管理员认证\n"
     "/company_help — 显示此帮助\n"
-    "\n🎰 /cp_slot — 老虎机（三个一样中奖，777大奖77777！每日奖励一次）\n"
-    "\n🤖 AI对话: 任意消息带 @机器人用户名 即可调用\n"
+    "\n🎰 /cp_slot — 老虎机（三个一样中奖，777大奖77777！每日奖励一次）\n"    "\n🏢 /company_checkin — 每日打卡（连续签到7天开宝箱！）\n"
+    "🧧 /company_redpacket <金额> <个数> — 发公司红包，群里抢！\n"
+    "\n📶 积分兑换流量：交易所→积分→流量\n"    "\n🤖 AI对话: 任意消息带 @机器人用户名 即可调用\n"
     "普通用户每分钟最多 10 次，管理员/超管不限制\n"
 )
 
