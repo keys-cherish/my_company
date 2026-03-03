@@ -15,6 +15,11 @@ def fmt_traffic(amount: int) -> str:
     return fmt_currency(amount)
 
 
+def fmt_quota(amount: int) -> str:
+    """Format quota/reserve credits."""
+    return fmt_currency(amount)
+
+
 def fmt_real_traffic(mb: int) -> str:
     """Format real traffic in MB/GB/TB."""
     if mb >= 1024 * 1024:

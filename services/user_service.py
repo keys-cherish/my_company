@@ -93,6 +93,13 @@ async def get_points(tg_id: int) -> int:
     return int(val) if val else 0
 
 
+async def get_quota_mb(tg_id: int) -> int:
+    """获取用户储备积分。"""
+    r = await get_redis()
+    val = await r.get(f"quota_mb:{tg_id}")
+    return int(val) if val else 0
+
+
 async def add_points(tg_id_or_user_id: int, amount: int, *, session: AsyncSession | None = None) -> int:
     """Add points and return new total.
 

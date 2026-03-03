@@ -429,7 +429,7 @@ async def render_company_finance_detail(company_id: int, tg_id: int) -> tuple[st
         f"预估总成本: {fmt_traffic(estimated_cost)}",
         "",
         f"💵 预估净利润: {'+' if estimated_profit >= 0 else ''}{fmt_traffic(estimated_profit)}",
-    ]
+    ])
 
     if latest_report:
         latest_profit = latest_report.total_income - latest_report.operating_cost
