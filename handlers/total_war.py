@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 # War trigger keywords — must contain at least one from each group
 _WAR_KEYWORDS = ("商战", "宣战", "开战", "打仗", "进攻", "出征")
-_ALL_KEYWORDS = ("所有", "全部", "all", "全面", "不计成本", "不择手段", "不遗余力")
+_ALL_KEYWORDS = ("所有", "全部", "all", "全面")
 
 # Costs
 WAR_POINT_COST = 1000
@@ -51,9 +51,6 @@ def _has_war_intent(text: str) -> bool:
         | F.text.contains("全部")
         | F.text.contains("all")
         | F.text.contains("全面")
-        | F.text.contains("不计成本")
-        | F.text.contains("不择手段")
-        | F.text.contains("不遗余力")
     )
 )
 async def on_total_war_mention(message: types.Message):
@@ -302,6 +299,7 @@ return 1
 
                 # Execute battles
                 from services.battle_service import do_battle, STRATEGIES
+                from services.operations_service import _clamp, get_or_create_profile
 
                 aggressive = STRATEGIES["aggressive"]
                 wins = 0
@@ -309,11 +307,16 @@ return 1
                 total_loot = 0
                 battle_lines = []
 
+                attacker_profile = await get_or_create_profile(session, company_id)
+
                 for target in targets:
                     try:
                         msg, attacker_won, _ = await do_battle(
                             session, my_company, target, aggressive
                         )
+                        # 每攻击一家公司：道德-3、监管+3
+                        attacker_profile.ethics = _clamp(attacker_profile.ethics - 3, -100, 100)
+                        attacker_profile.regulation_pressure = _clamp(attacker_profile.regulation_pressure + 3, 0, 100)
                         if attacker_won:
                             wins += 1
                             # Extract loot from message (rough parse)
@@ -328,6 +331,7 @@ return 1
                         battle_lines.append(f"  ⚠️ vs {target.name} — 异常")
 
                 # Apply self revenue buff if any wins
+                await session.flush()  # flush ethics/regulation changes
                 if wins > 0:
                     from services.battle_service import _next_settlement_time
                     import datetime as dt

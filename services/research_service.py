@@ -142,6 +142,21 @@ def get_effective_research_duration_seconds(tech: dict, company_type: str, tech_
     return max(300, int(base * multiplier))
 
 
+def get_effective_research_cost(
+    tech: dict,
+    completed_count: int,
+    company_type: str,
+    tech_id: str,
+) -> int:
+    """Calculate dynamic research cost for both UI display and actual deduction."""
+    base_cost = int(tech.get("cost", settings.base_research_cost))
+    scaled_cost = int(base_cost * (1 + completed_count * RESEARCH_COST_GROWTH_PER_COMPLETED))
+    cost = max(base_cost, scaled_cost)
+    if tech_id in get_company_focus_tech_ids(company_type):
+        cost = int(cost * 0.9)
+    return cost
+
+
 async def get_completed_techs(session: AsyncSession, company_id: int) -> list[str]:
     result = await session.execute(
         select(ResearchProgress).where(
@@ -188,6 +203,7 @@ async def get_available_techs(session: AsyncSession, company_id: int) -> list[di
     tree = _load_tech_tree()
     await sync_research_progress_if_due(session, company_id)
     completed = set(await get_completed_techs(session, company_id))
+    completed_count = len(completed)
 
     # Also exclude in-progress
     in_progress_rows = await get_in_progress_research(session, company_id)
@@ -206,6 +222,12 @@ async def get_available_techs(session: AsyncSession, company_id: int) -> list[di
             tech = {"tech_id": tech_id, **info}
             tech["effective_duration_seconds"] = get_effective_research_duration_seconds(
                 info, company_type, tech_id
+            )
+            tech["research_cost"] = get_effective_research_cost(
+                info,
+                completed_count,
+                company_type,
+                tech_id,
             )
             available.append(tech)
     return available
@@ -236,11 +258,13 @@ async def start_research(
     tech = tree.get(tech_id, {})
 
     # 计算科研成本
-    base_cost = int(tech.get("cost", settings.base_research_cost))
-    scaled_cost = int(base_cost * (1 + completed_count * RESEARCH_COST_GROWTH_PER_COMPLETED))
-    research_cost = max(base_cost, scaled_cost)
-    if company and tech_id in get_company_focus_tech_ids(company.company_type):
-        research_cost = int(research_cost * 0.9)
+    company_type = company.company_type if company else "tech"
+    research_cost = get_effective_research_cost(
+        tech,
+        completed_count,
+        company_type,
+        tech_id,
+    )
 
     # 构建上下文
     ctx = {

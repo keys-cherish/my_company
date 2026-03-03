@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import random
 from pathlib import Path
 
 from sqlalchemy import select, func as sqlfunc
@@ -51,6 +52,39 @@ def _load_products() -> dict:
         with open(path, encoding="utf-8") as f:
             _products_data = json.load(f)
     return _products_data
+
+
+def _today_utc(now: dt.datetime | None = None) -> dt.datetime:
+    current = now or dt.datetime.now(dt.timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=dt.timezone.utc)
+    return current.astimezone(dt.timezone.utc)
+
+
+def _daily_create_counter_key(company_id: int, now: dt.datetime | None = None) -> str:
+    return f"product_create_daily:{company_id}:{_today_utc(now).date().isoformat()}"
+
+
+def _seconds_until_next_utc_day(now: dt.datetime | None = None) -> int:
+    current = _today_utc(now)
+    tomorrow = (current + dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(1, int((tomorrow - current).total_seconds()))
+
+
+def _product_upgrade_cooldown_key(company_id: int, tech_id: str) -> str:
+    return f"product_upgrade_cd:{company_id}:{tech_id}"
+
+
+async def _mark_daily_product_create(company_id: int) -> None:
+    """Increment daily create event counter; best-effort only."""
+    try:
+        r = await get_redis()
+        key = _daily_create_counter_key(company_id)
+        count = await r.incr(key)
+        if count == 1:
+            await r.expire(key, _seconds_until_next_utc_day() + 60)
+    except Exception:
+        return
 
 
 async def get_available_product_templates(session: AsyncSession, company_id: int) -> list[dict]:
@@ -152,13 +186,13 @@ async def create_product(
     )
     session.add(product)
     await session.flush()
-
     owner = await session.get(User, owner_user_id)
     await add_points(owner_user_id, 10, session=session)
 
     # Quest progress
     from services.quest_service import update_quest_progress
     await update_quest_progress(session, owner_user_id, "product_count", increment=1)
+    await _mark_daily_product_create(company_id)
 
     return product, (
         f"产品「{name}」打造成功! 日收入: {fmt_traffic(tmpl['base_daily_income'])} "
@@ -215,6 +249,14 @@ async def upgrade_product(
     if not ok:
         return False, f"公司积分不足，升级需要 {fmt_traffic(upgrade_cost)}"
 
+    # 负道德时产品升级有失败率
+    from services.operations_service import get_or_create_profile
+    profile = await get_or_create_profile(session, product.company_id)
+    if profile.ethics < 0:
+        fail_rate = min(0.40, abs(profile.ethics) * 0.004)
+        if random.random() < fail_rate:
+            return False, f"⚠️ 产品升级失败！(道德{profile.ethics}，失败率{int(fail_rate * 100)}%)"
+
     # 迭代收入增幅随版本递减（防止无限刷）
     diminish = max(0.05, settings.product_upgrade_income_pct - (product.version - 1) * 0.01)
     income_boost = max(1, int(product.daily_income * diminish))
@@ -228,7 +270,7 @@ async def upgrade_product(
 
     # 设置24小时CD
     r = await get_redis()
-    cd_key = f"product_upgrade_cd:{product_id}"
+    cd_key = _product_upgrade_cooldown_key(product.company_id, product.tech_id)
     await r.setex(cd_key, 86400, "1")
 
     await add_points(owner_user_id, 5, session=session)

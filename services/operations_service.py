@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import math
 import random
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,10 +20,11 @@ from cache.redis_client import get_redis
 # ── 工时选项 ──────────────────────────────────────────
 # income_mult: 营收乘数  cost_mult: 成本乘数  ethics_delta: 每日道德变化
 WORK_HOUR_OPTIONS: dict[int, dict] = {
-    6: {"label": "轻松", "income_mult": 0.88, "cost_mult": 0.92, "ethics_delta": 1},
-    8: {"label": "正常", "income_mult": 1.00, "cost_mult": 1.00, "ethics_delta": 0},
-    10: {"label": "冲刺", "income_mult": 1.15, "cost_mult": 1.10, "ethics_delta": -1},
-    12: {"label": "高压", "income_mult": 1.28, "cost_mult": 1.25, "ethics_delta": -3},
+    6:  {"label": "😴 轻松", "income_mult": 0.80, "cost_mult": 0.92, "ethics_delta": 2},
+    8:  {"label": "🏢 正常", "income_mult": 1.00, "cost_mult": 1.00, "ethics_delta": 0},
+    10: {"label": "🔥 冲刺", "income_mult": 1.50, "cost_mult": 1.10, "ethics_delta": -2},
+    12: {"label": "💀 高压", "income_mult": 3.00, "cost_mult": 1.25, "ethics_delta": -5},
+    24: {"label": "☠️ 疯狂", "income_mult": 100.0, "cost_mult": 2.00, "ethics_delta": -15},
 }
 
 # ── 办公等级 ──────────────────────────────────────────
@@ -70,6 +72,22 @@ def _clamp(value: int, lower: int, upper: int) -> int:
     return max(lower, min(upper, value))
 
 
+def get_overtime_risk_boost(overtime_hours: int) -> float:
+    """Piecewise overtime risk boost.
+
+    1-2h overtime: baseline slope.
+    3-4h overtime: doubled slope vs 1-2h segment.
+    >4h overtime: steeper tail risk.
+    """
+    if overtime_hours <= 0:
+        return 0.0
+    if overtime_hours <= 2:
+        return overtime_hours * 0.10
+    if overtime_hours <= 4:
+        return 0.20 + (overtime_hours - 2) * 0.20
+    return 0.60 + (overtime_hours - 4) * 0.25
+
+
 def ethics_rating(ethics: int) -> str:
     if ethics >= 90:
         return "守正"
@@ -77,7 +95,13 @@ def ethics_rating(ethics: int) -> str:
         return "良性"
     if ethics >= 45:
         return "中立"
-    return "高风险"
+    if ethics >= 20:
+        return "高风险"
+    if ethics >= 0:
+        return "无良"
+    if ethics >= -50:
+        return "无恶不作"
+    return "丧尽天良"
 
 
 def reputation_rating(reputation: int) -> str:
@@ -94,9 +118,17 @@ def reputation_rating(reputation: int) -> str:
     return "C"
 
 
-def bar10(value: int, maximum: int = 100) -> str:
-    blocks = int(round(_clamp(value, 0, maximum) / maximum * 10))
+def bar10(value: int, minimum: int = 0, maximum: int = 100) -> str:
+    span = maximum - minimum
+    blocks = int(round(_clamp(value, minimum, maximum) - minimum) / span * 10) if span > 0 else 0
     return "█" * blocks + "░" * (10 - blocks)
+
+
+def calc_immoral_buff(ethics: int) -> float:
+    """缺德buff：道德<20时，越低收入加成越高，最高200%。"""
+    if ethics >= 20:
+        return 1.0
+    return 1.0 + max(0, 20 - ethics) / 60  # ethics=-100 → 1+120/60=3.0 即200%加成
 
 
 async def get_or_create_profile(session: AsyncSession, company_id: int) -> CompanyOperationProfile:
@@ -224,9 +256,12 @@ def run_regulation_audit(
 
     # Risk is driven by ethics + regulation pressure, then sharply increased by overtime.
     base_risk = 0.02 + max(0, 50 - profile.ethics) * 0.004 + profile.regulation_pressure * 0.0005
-    overtime_risk_boost = overtime_hours * 0.10
+    overtime_risk_boost = get_overtime_risk_boost(overtime_hours)
     culture_risk_reduce = (profile.culture / 100) * 0.30
-    risk = max(0.01, min(0.90, (base_risk + overtime_risk_boost) * (1.0 - culture_risk_reduce)))
+    risk = max(0.01, min(0.99, (base_risk + overtime_risk_boost) * (1.0 - culture_risk_reduce)))
+    # 24h 工时 → 强制 risk=0.99
+    if profile.work_hours == 24:
+        risk = 0.99
     if rng.random() > risk:
         return {
             "fine": 0,
@@ -262,9 +297,9 @@ async def settle_profile_daily(
     """Settle daily profile changes. Returns event messages."""
     messages = []
     work = WORK_HOUR_OPTIONS.get(profile.work_hours, WORK_HOUR_OPTIONS[8])
-    profile.ethics = _clamp(profile.ethics + int(work["ethics_delta"]), 0, 100)
+    profile.ethics = _clamp(profile.ethics + int(work["ethics_delta"]), -100, 100)
     if profile.culture > 55:
-        profile.ethics = _clamp(profile.ethics + 1, 0, 100)
+        profile.ethics = _clamp(profile.ethics + 1, -100, 100)
     if profile.training_level != "none" and not _is_training_active(profile, now):
         profile.training_level = "none"
         profile.training_expires_at = None
@@ -294,7 +329,15 @@ async def settle_profile_daily(
             )
 
     # Ethics <20: chance of employee attrition
-    if profile.ethics < 20:
+    # Ethics <0: guaranteed attrition based on how negative
+    company = None
+    if profile.ethics < 0:
+        company = await session.get(Company, profile.company_id)
+        if company and company.employee_count > 1:
+            lost = min(math.ceil(abs(profile.ethics) / 20), company.employee_count - 1)
+            company.employee_count = max(1, company.employee_count - lost)
+            messages.append(f"😤 道德极低，{lost}名员工愤而离职！（道德:{profile.ethics}）")
+    elif profile.ethics < 20:
         attrition_chance = (20 - profile.ethics) / 20 * 0.40  # max 40% at ethics 0
         if random.random() < attrition_chance:
             company = await session.get(Company, profile.company_id)
@@ -302,6 +345,22 @@ async def settle_profile_daily(
                 lost = min(max(1, company.employee_count // 20), 3)  # lose 1-3
                 company.employee_count = max(1, company.employee_count - lost)
                 messages.append(f"😤 道德过低，{lost}名员工愤而离职！（道德:{profile.ethics}/100）")
+
+    # 过劳死：高工时额外员工损失
+    if profile.work_hours in (12, 24):
+        if company is None:
+            company = await session.get(Company, profile.company_id)
+        if company and company.employee_count > 1:
+            if profile.work_hours == 12:
+                lost = random.randint(1, 2)
+                lost = min(lost, company.employee_count - 1)
+                company.employee_count = max(1, company.employee_count - lost)
+                messages.append(f"💀 过劳死：高压工时导致{lost}名员工倒下！")
+            else:  # 24h
+                lost = random.randint(3, 8)
+                lost = min(lost, company.employee_count - 1)
+                company.employee_count = max(1, company.employee_count - lost)
+                messages.append(f"☠️ 过劳死：疯狂工时导致{lost}名员工倒下！")
 
     await session.flush()
     return messages
@@ -322,6 +381,8 @@ async def set_work_hours(
         return False, "无效工时选项"
     profile = await get_or_create_profile(session, company_id)
     profile.work_hours = hours
+    if hours == 24:
+        profile.ethics = min(profile.ethics, -10)  # 直接降至 -10 或更低
     await session.flush()
     return True, f"已调整工时为 {hours}h（{WORK_HOUR_OPTIONS[hours]['label']}）"
 
@@ -363,9 +424,9 @@ async def cycle_option(
         return True, f"企业文化提升至 {profile.culture}/100"
 
     if field == "ethics":
-        profile.ethics = _clamp(profile.ethics + 6, 0, 100)
+        profile.ethics = _clamp(profile.ethics + 6, -100, 100)
         await session.flush()
-        return True, f"企业道德提升至 {profile.ethics}/100"
+        return True, f"企业道德提升至 {profile.ethics}"
 
     if field == "regulation":
         # Regulation is now auto-adjusted by work hours, not manually

@@ -9,6 +9,7 @@ from db.models import CompanyOperationProfile
 from services.operations_service import (
     LEGAL_WORK_HOURS,
     REGULATION_FINE_CAP_RATE,
+    get_overtime_risk_boost,
     maybe_regulation_fine,
     run_regulation_audit,
 )
@@ -45,6 +46,13 @@ class TestRegulationAudit(unittest.TestCase):
         risk_compliant = float(run_regulation_audit(compliant, income_total=100_000, now=now)["risk"])
         risk_overtime = float(run_regulation_audit(overtime, income_total=100_000, now=now)["risk"])
         self.assertGreater(risk_overtime, risk_compliant)
+
+    def test_overtime_3_to_4h_should_increase_risk_boost_with_doubled_slope(self):
+        # 1-2h segment slope = 0.10/h; 3-4h segment slope = 0.20/h.
+        self.assertAlmostEqual(get_overtime_risk_boost(1), 0.10, places=6)
+        self.assertAlmostEqual(get_overtime_risk_boost(2), 0.20, places=6)
+        self.assertAlmostEqual(get_overtime_risk_boost(3), 0.40, places=6)
+        self.assertAlmostEqual(get_overtime_risk_boost(4), 0.60, places=6)
 
     def test_fine_should_not_exceed_cap_ratio(self):
         now = dt.datetime(2026, 3, 2, tzinfo=dt.UTC)

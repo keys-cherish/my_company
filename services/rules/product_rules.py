@@ -15,6 +15,21 @@ from utils.rules import Rule, RuleViolation
 from utils.validators import validate_name
 
 
+def _today_utc(now: dt.datetime | None = None) -> dt.datetime:
+    current = now or dt.datetime.now(dt.timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=dt.timezone.utc)
+    return current.astimezone(dt.timezone.utc)
+
+
+def _daily_create_counter_key(company_id: int, now: dt.datetime | None = None) -> str:
+    return f"product_create_daily:{company_id}:{_today_utc(now).date().isoformat()}"
+
+
+def _product_upgrade_cooldown_key(company_id: int, tech_id: str) -> str:
+    return f"product_upgrade_cd:{company_id}:{tech_id}"
+
+
 # ============================================================================
 # Product Creation Rules
 # ============================================================================
@@ -148,15 +163,25 @@ async def check_product_daily_limit(
     **_,
 ) -> RuleViolation | None:
     """检查每日创建上限。"""
-    today_start = dt.datetime.now(dt.timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0, tzinfo=None
-    )
-    today_count = (await session.execute(
-        select(sqlfunc.count()).select_from(Product).where(
-            Product.company_id == company_id,
-            Product.created_at >= today_start,
+    today_count: int | None = None
+    try:
+        r = await get_redis()
+        cached_count = await r.get(_daily_create_counter_key(company_id))
+        if cached_count is not None:
+            today_count = int(cached_count)
+    except Exception:
+        today_count = None
+
+    if today_count is None:
+        today_start = _today_utc().replace(
+            hour=0, minute=0, second=0, microsecond=0, tzinfo=None
         )
-    )).scalar() or 0
+        today_count = (await session.execute(
+            select(sqlfunc.count()).select_from(Product).where(
+                Product.company_id == company_id,
+                Product.created_at >= today_start,
+            )
+        )).scalar() or 0
     if today_count >= max_daily:
         return RuleViolation(
             code="DAILY_LIMIT_REACHED",
@@ -345,12 +370,16 @@ async def check_product_max_income(
 
 
 async def check_product_upgrade_cooldown(
+    session: AsyncSession,
     product_id: int,
     **_,
 ) -> RuleViolation | None:
     """检查产品升级冷却。"""
+    product = await session.get(Product, product_id)
+    if not product:
+        return None
     r = await get_redis()
-    cd_key = f"product_upgrade_cd:{product_id}"
+    cd_key = _product_upgrade_cooldown_key(product.company_id, product.tech_id)
     cd_ttl = await r.ttl(cd_key)
     if cd_ttl > 0:
         hours = cd_ttl // 3600

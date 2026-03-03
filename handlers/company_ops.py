@@ -71,8 +71,21 @@ async def cb_ops_work(callback: types.CallbackQuery):
         f"成本倍率：×{info['cost_mult']:.2f}",
         f"道德变动：{'+' if info['ethics_delta'] >= 0 else ''}{info['ethics_delta']}/日",
         f"{'─' * 24}",
-        f"💡 工时调整免费，立即生效",
     ]
+    if hours == 12:
+        lines.extend([
+            "⚠️ 危险警告：",
+            "💀 高压工时：每日过劳死1-2人，道德-5/日",
+            f"{'─' * 24}",
+        ])
+    elif hours == 24:
+        lines.extend([
+            "⚠️ 极度危险警告：",
+            "☠️ 疯狂工时：99%监管概率，每日过劳死3-8人",
+            "☠️ 道德直降负数，员工大量离职",
+            f"{'─' * 24}",
+        ])
+    lines.append("💡 工时调整免费，立即生效")
     kb = tag_kb(InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="✅ 确认切换", callback_data=f"ops:xwork:{cid}:{hours}"),
@@ -176,10 +189,11 @@ async def cb_ops_cycle(callback: types.CallbackQuery):
         lines = [
             "😐 道德整改确认",
             f"{'─' * 24}",
-            f"当前道德：{profile.ethics}/100 ({ethics_rating(profile.ethics)})",
-            f"整改后：{new_val}/100 ({ethics_rating(new_val)})",
+            f"当前道德：{profile.ethics} ({ethics_rating(profile.ethics)})",
+            f"整改后：{new_val} ({ethics_rating(new_val)})",
             f"{'─' * 24}",
-            f"📉 道德<20时：员工可能愤而离职",
+            f"📉 道德<0时：员工每日保底离职",
+            f"📉 道德<20时：员工可能离职，缺德buff最高营收+200%",
             f"📉 道德<30时：招聘成本+50%，估值-20%",
             f"🚫 道德<40时：无法发起合作",
             f"📈 道德≥70时：招聘成本-20%，估值+15%",

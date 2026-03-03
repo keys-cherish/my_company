@@ -22,6 +22,7 @@ from services.settlement.pipeline import (
 from services.settlement.breakdowns import IncomeBreakdown
 from services.operations_service import (
     calc_extra_operating_costs,
+    calc_immoral_buff,
     get_market_trend,
     get_operation_multipliers,
     get_or_create_profile,
@@ -119,6 +120,10 @@ async def settle_company(session: AsyncSession, company: Company) -> tuple[Daily
         )
         income.employee_income = emp_base_output + emp_efficiency_bonus
 
+        # 重新计算缺德buff
+        immoral_mult = calc_immoral_buff(profile.ethics)
+        income.immoral_buff = int(adjusted_product_income * (immoral_mult - 1.0)) if immoral_mult > 1.0 else 0
+
     # Quest progress for daily_revenue and employee_count
     from services.quest_service import update_quest_progress
     await update_quest_progress(session, company.owner_id, "daily_revenue", current_value=income.total)
@@ -184,6 +189,12 @@ async def settle_company(session: AsyncSession, company: Company) -> tuple[Daily
         event_messages.append(
             f"⚔️ 全面商战Buff：营收+{int(totalwar_buff_rate * 100)}% "
             f"(+{income.totalwar_buff:,})"
+        )
+    # 缺德buff事件消息
+    if income.immoral_buff > 0:
+        immoral_mult = calc_immoral_buff(profile.ethics)
+        event_messages.append(
+            f"😈 缺德buff：道德{profile.ethics} → 营收+{int((immoral_mult - 1) * 100)}% (+{income.immoral_buff:,})"
         )
     await save_recent_events(company.id, event_messages)
     profile_msgs = await settle_profile_daily(session, profile, now_utc)

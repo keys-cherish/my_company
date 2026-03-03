@@ -34,6 +34,7 @@ from services.operations_service import (
     TRAINING_LEVELS,
     WORK_HOUR_OPTIONS,
     bar10,
+    calc_immoral_buff,
     calc_extra_operating_costs,
     ethics_rating,
     get_market_trend,
@@ -157,6 +158,8 @@ async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, Inlin
     shop_buff_income = int(product_income * (shop_buff_mult - 1.0))
     type_income_bonus = type_info.get("income_bonus", 0.0) if type_info else 0.0
     type_income = int(product_income * type_income_bonus)
+    immoral_mult = calc_immoral_buff(profile.ethics)
+    immoral_buff_income = int(product_income * (immoral_mult - 1.0)) if immoral_mult > 1.0 else 0
     estimated_income = (
         product_income
         + level_rev_bonus
@@ -166,6 +169,7 @@ async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, Inlin
         + ad_boost_income
         + shop_buff_income
         + type_income
+        + immoral_buff_income
     )
     tax = int(estimated_income * cfg.tax_rate)
     salary_cost = company.employee_count * cfg.employee_salary_base
@@ -250,7 +254,9 @@ async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, Inlin
         f"⭐ 声望：{rep_value}（评级 {reputation_rating(rep_value)}）\n"
         f"👥 员工：{company.employee_count}/{max_employees}\n"
         f"💰 积分余额：{fmt_quota(company.total_funds)}\n"
-        f"😐 道德：{profile.ethics}/100 [{bar10(profile.ethics)}] {ethics_rating(profile.ethics)}\n\n"
+        f"😐 道德：{profile.ethics} [{bar10(profile.ethics, -100, 100)}] {ethics_rating(profile.ethics)}\n"
+        f"{'😈 缺德buff：营收+' + str(int((immoral_mult - 1) * 100)) + '%' + chr(10) if immoral_buff_income > 0 else ''}"
+        f"\n"
         f"📈 预估日营收：{fmt_quota(estimated_income)}\n"
         f"  产品收入：{fmt_quota(product_income)} | 地产收入：{fmt_quota(estate_income)}\n"
         f"📉 预估日成本：{fmt_quota(estimated_cost)}\n"
@@ -341,6 +347,8 @@ async def render_company_finance_detail(company_id: int, tg_id: int) -> tuple[st
     totalwar_buff_income = 0  # uncertain at panel time; settlement applies Redis temporary buff.
     type_income_bonus = type_info.get("income_bonus", 0.0) if type_info else 0.0
     type_income = int(product_income * type_income_bonus)
+    fin_immoral_mult = calc_immoral_buff(profile.ethics)
+    fin_immoral_buff_income = int(product_income * (fin_immoral_mult - 1.0)) if fin_immoral_mult > 1.0 else 0
 
     estimated_income = (
         product_income
@@ -352,6 +360,7 @@ async def render_company_finance_detail(company_id: int, tg_id: int) -> tuple[st
         + shop_buff_income
         + totalwar_buff_income
         + type_income
+        + fin_immoral_buff_income
     )
 
     # Estimated costs.
@@ -398,6 +407,10 @@ async def render_company_finance_detail(company_id: int, tg_id: int) -> tuple[st
         f"广告加成: +{fmt_traffic(ad_boost_income)}",
         f"商城加成: +{fmt_traffic(shop_buff_income)}",
         f"公司类型加成: +{fmt_traffic(type_income)}",
+    ]
+    if fin_immoral_buff_income > 0:
+        lines.append(f"😈 缺德buff: +{fmt_traffic(fin_immoral_buff_income)}")
+    lines.extend([
         f"预估总收入: {fmt_traffic(estimated_income)}",
         "",
         "【成本目录】",
@@ -468,10 +481,13 @@ async def _start_company_type_selection(message: types.Message, state: FSMContex
 def _ops_menu_kb(company_id: int, tg_id: int, training_active: bool = False) -> InlineKeyboardMarkup:
     rows = [
         [
-            InlineKeyboardButton(text="6h 轻松", callback_data=f"ops:work:{company_id}:6"),
-            InlineKeyboardButton(text="8h 正常", callback_data=f"ops:work:{company_id}:8"),
-            InlineKeyboardButton(text="10h 冲刺", callback_data=f"ops:work:{company_id}:10"),
-            InlineKeyboardButton(text="12h 高压", callback_data=f"ops:work:{company_id}:12"),
+            InlineKeyboardButton(text="😴 6h", callback_data=f"ops:work:{company_id}:6"),
+            InlineKeyboardButton(text="🏢 8h", callback_data=f"ops:work:{company_id}:8"),
+            InlineKeyboardButton(text="🔥 10h", callback_data=f"ops:work:{company_id}:10"),
+        ],
+        [
+            InlineKeyboardButton(text="💀 12h", callback_data=f"ops:work:{company_id}:12"),
+            InlineKeyboardButton(text="☠️ 24h", callback_data=f"ops:work:{company_id}:24"),
         ],
         [
             InlineKeyboardButton(text="🏢 升级办公", callback_data=f"ops:cycle:{company_id}:office"),

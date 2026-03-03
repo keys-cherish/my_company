@@ -7,8 +7,9 @@ from unittest.mock import patch
 from sqlalchemy import select
 
 from db.models import Company, Product, ResearchProgress, User
+from keyboards.menus import tech_list_kb
 from services.product_service import create_product, upgrade_product
-from services.research_service import start_research
+from services.research_service import get_available_techs, start_research
 
 from tests.helpers.async_db_case import AsyncDBTestCase
 from tests.helpers.fake_redis import FakeRedis
@@ -148,6 +149,52 @@ class TestProgressiveRndCosts(AsyncDBTestCase):
             self.assertIsNotNone(rp)
             self.assertEqual(rp.status, "researching")
 
+    async def test_research_list_cost_matches_popup_and_actual_deduction(self):
+        async with self.Session() as session:
+            async with session.begin():
+                owner = User(tg_id=7251, tg_name="owner-7251", traffic=0, reputation=100)
+                session.add(owner)
+                await session.flush()
+
+                company = Company(
+                    name="ResearchCostUI",
+                    owner_id=owner.id,
+                    company_type="tech",
+                    total_funds=20_000,
+                    daily_revenue=0,
+                    level=1,
+                    employee_count=5,
+                )
+                session.add(company)
+                await session.flush()
+
+                # Ensure cloud_computing is available and completed_count = 1.
+                session.add(
+                    ResearchProgress(
+                        company_id=company.id,
+                        tech_id="basic_internet",
+                        status="completed",
+                    )
+                )
+                await session.flush()
+
+                available = await get_available_techs(session, company.id)
+                cloud = next(t for t in available if t["tech_id"] == "cloud_computing")
+                expected_cost = int(5000 * 1.2 * 0.9)  # base * growth(1 completed) * focus discount
+                self.assertEqual(cloud["research_cost"], expected_cost)
+
+                kb = tech_list_kb([cloud], company.id)
+                button_text = kb.inline_keyboard[0][0].text
+                self.assertIn("5,400", button_text)
+
+                funds_before = company.total_funds
+                ok, msg = await start_research(session, company.id, owner.id, "cloud_computing")
+                self.assertTrue(ok)
+                self.assertIn("5,400", msg)
+
+            updated_company = await session.get(Company, company.id)
+            self.assertEqual(updated_company.total_funds, funds_before - expected_cost)
+
     async def test_create_product_cost_grows_with_existing_products(self):
         async with self.Session() as session:
             async with session.begin():
@@ -200,3 +247,130 @@ class TestProgressiveRndCosts(AsyncDBTestCase):
                 updated_company.total_funds,
                 funds_before_first - first_cost - second_cost,
             )
+
+    async def test_daily_create_counter_increments_after_successful_create(self):
+        async with self.Session() as session:
+            async with session.begin():
+                owner = User(tg_id=7351, tg_name="owner-7351", traffic=0, reputation=200)
+                session.add(owner)
+                await session.flush()
+
+                company = Company(
+                    name="CreateCounterCo",
+                    owner_id=owner.id,
+                    company_type="tech",
+                    total_funds=50_000,
+                    daily_revenue=0,
+                    level=1,
+                    employee_count=10,
+                )
+                session.add(company)
+                await session.flush()
+
+                session.add(
+                    ResearchProgress(
+                        company_id=company.id,
+                        tech_id="basic_internet",
+                        status="completed",
+                    )
+                )
+                await session.flush()
+
+                product, msg = await create_product(
+                    session,
+                    company.id,
+                    owner.id,
+                    "simple_website",
+                    custom_name="CounterP1",
+                )
+                self.assertIsNotNone(product, msg=msg)
+
+                from services.product_service import _daily_create_counter_key
+                key = _daily_create_counter_key(company.id)
+                self.assertEqual(await self.fake_redis.get(key), "1")
+
+    async def test_daily_limit_not_reset_by_delete(self):
+        async with self.Session() as session:
+            async with session.begin():
+                owner = User(tg_id=7361, tg_name="owner-7361", traffic=0, reputation=300)
+                session.add(owner)
+                await session.flush()
+
+                company = Company(
+                    name="DeleteBypassCo",
+                    owner_id=owner.id,
+                    company_type="tech",
+                    total_funds=200_000,
+                    daily_revenue=0,
+                    level=1,
+                    employee_count=20,
+                )
+                session.add(company)
+                await session.flush()
+
+                session.add(
+                    ResearchProgress(
+                        company_id=company.id,
+                        tech_id="basic_internet",
+                        status="completed",
+                    )
+                )
+                await session.flush()
+
+                p1, msg1 = await create_product(session, company.id, owner.id, "simple_website", custom_name="D1")
+                p2, msg2 = await create_product(session, company.id, owner.id, "simple_website", custom_name="D2")
+                p3, msg3 = await create_product(session, company.id, owner.id, "simple_website", custom_name="D3")
+                self.assertIsNotNone(p1, msg=msg1)
+                self.assertIsNotNone(p2, msg=msg2)
+                self.assertIsNotNone(p3, msg=msg3)
+
+                await session.delete(p2)
+                await session.flush()
+
+                p4, msg4 = await create_product(session, company.id, owner.id, "simple_website", custom_name="D4")
+                self.assertIsNone(p4)
+                self.assertTrue(msg4)
+
+    async def test_upgrade_cooldown_persists_after_delete_and_recreate_same_tech(self):
+        async with self.Session() as session:
+            async with session.begin():
+                owner = User(tg_id=7371, tg_name="owner-7371", traffic=0, reputation=300)
+                session.add(owner)
+                await session.flush()
+
+                company = Company(
+                    name="UpgradeCdCo",
+                    owner_id=owner.id,
+                    company_type="tech",
+                    total_funds=500_000,
+                    daily_revenue=0,
+                    level=1,
+                    employee_count=20,
+                )
+                session.add(company)
+                await session.flush()
+
+                session.add(
+                    ResearchProgress(
+                        company_id=company.id,
+                        tech_id="basic_internet",
+                        status="completed",
+                    )
+                )
+                await session.flush()
+
+                p1, msg1 = await create_product(session, company.id, owner.id, "simple_website", custom_name="U1")
+                self.assertIsNotNone(p1, msg=msg1)
+
+                ok, up_msg = await upgrade_product(session, p1.id, owner.id)
+                self.assertTrue(ok, msg=up_msg)
+
+                await session.delete(p1)
+                await session.flush()
+
+                p2, msg2 = await create_product(session, company.id, owner.id, "simple_website", custom_name="U2")
+                self.assertIsNotNone(p2, msg=msg2)
+
+                ok2, up_msg2 = await upgrade_product(session, p2.id, owner.id)
+                self.assertFalse(ok2)
+                self.assertTrue(up_msg2)

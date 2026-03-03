@@ -31,6 +31,7 @@ class IncomeBreakdown:
     totalwar_buff: int = 0
     type_bonus: int = 0
     employee_income: int = 0
+    immoral_buff: int = 0
 
     @property
     def total(self) -> int:
@@ -46,6 +47,7 @@ class IncomeBreakdown:
             self.totalwar_buff,
             self.type_bonus,
             self.employee_income,
+            self.immoral_buff,
         ])
 
 

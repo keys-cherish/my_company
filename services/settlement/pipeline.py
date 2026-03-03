@@ -98,6 +98,12 @@ async def compute_base_income(
     )
     breakdown.employee_income = emp_base_output + emp_efficiency_bonus
 
+    # 11. Immoral buff (缺德buff)
+    from services.operations_service import calc_immoral_buff
+    immoral_mult = calc_immoral_buff(profile.ethics)
+    if immoral_mult > 1.0:
+        breakdown.immoral_buff = int(breakdown.product_income * (immoral_mult - 1.0))
+
     return breakdown
 
 

@@ -14,11 +14,15 @@ from db.engine import async_session
 from handlers.common import is_super_admin
 from keyboards.menus import tag_kb
 from services.company_service import get_company_by_id, get_companies_by_owner, update_daily_revenue
+from cache.redis_client import get_redis
+from config import settings
 from services.product_service import (
     create_product,
     get_available_product_templates,
     get_company_products,
     upgrade_product,
+    PRODUCT_CREATE_COST_GROWTH,
+    MAX_PRODUCT_VERSION,
 )
 from services.user_service import get_user_by_tg_id
 from utils.formatters import fmt_traffic
@@ -145,26 +149,38 @@ async def _refresh_product_list(callback: types.CallbackQuery, company_id: int):
             products = await get_company_products(session, company_id)
             templates = await get_available_product_templates(session, company_id)
 
+        # Filter out templates that already have products
+        existing_tech_ids = {p.tech_id for p in products}
+        templates = [t for t in templates if t["tech_id"] not in existing_tech_ids]
+
         lines = [f"📦 {company.name} — 产品列表", "─" * 24]
 
         product_buttons = []
         if products:
             for p in products:
+                upgrade_cost = int(settings.product_upgrade_cost_base * (1.3 ** (p.version - 1)))
+                remaining = min(5, MAX_PRODUCT_VERSION - p.version)
+                x5_cost = sum(int(settings.product_upgrade_cost_base * (1.3 ** (p.version - 1 + i))) for i in range(remaining)) if remaining > 0 else 0
                 lines.append(f"• {p.name} v{p.version} — {fmt_traffic(p.daily_income)}/日 (品质:{p.quality})")
                 product_buttons.append([
-                    InlineKeyboardButton(text=f"⬆️x1 {p.name}", callback_data=f"product:upgrade:{p.id}:1"),
-                    InlineKeyboardButton(text=f"⬆️x5 {p.name}", callback_data=f"product:upgrade:{p.id}:5"),
+                    InlineKeyboardButton(text=f"⬆️x1 {p.name} 💰{upgrade_cost:,}", callback_data=f"product:upgrade:{p.id}:1"),
+                    InlineKeyboardButton(text=f"⬆️x5 {p.name} 💰{x5_cost:,}", callback_data=f"product:upgrade:{p.id}:5"),
                     InlineKeyboardButton(text=f"🗑 下架", callback_data=f"product:delete:{p.id}:{company_id}"),
                 ])
         else:
             lines.append("暂无产品")
 
-        lines.append("\n🆕 可创建的产品:")
+        if templates:
+            create_cost = max(
+                settings.product_create_cost,
+                int(settings.product_create_cost * (1 + len(products) * PRODUCT_CREATE_COST_GROWTH)),
+            )
+            lines.append(f"\n🆕 可创建的产品 (创建费💰{create_cost:,}):")
         text = "\n".join(lines)
 
         template_buttons = [
             [InlineKeyboardButton(
-                text=f"{t['name']} (💰{t['base_daily_income']}/日)",
+                text=f"{t['name']} (收入{fmt_traffic(t['base_daily_income'])}/日)",
                 callback_data=f"product:create:{company_id}:{t['product_key']}",
             )]
             for t in templates
@@ -229,15 +245,22 @@ async def cb_product_list(callback: types.CallbackQuery, company_id: int | None 
         products = await get_company_products(session, company_id)
         templates = await get_available_product_templates(session, company_id)
 
+    # Filter out templates that already have products
+    existing_tech_ids = {p.tech_id for p in products}
+    templates = [t for t in templates if t["tech_id"] not in existing_tech_ids]
+
     lines = [f"📦 {company.name} — 产品列表", "─" * 24]
 
     product_buttons = []
     if products:
         for p in products:
+            upgrade_cost = int(settings.product_upgrade_cost_base * (1.3 ** (p.version - 1)))
+            remaining = min(5, MAX_PRODUCT_VERSION - p.version)
+            x5_cost = sum(int(settings.product_upgrade_cost_base * (1.3 ** (p.version - 1 + i))) for i in range(remaining)) if remaining > 0 else 0
             lines.append(f"• {p.name} v{p.version} — {fmt_traffic(p.daily_income)}/日 (品质:{p.quality})")
             product_buttons.append([
-                InlineKeyboardButton(text=f"⬆️x1 {p.name}", callback_data=f"product:upgrade:{p.id}:1"),
-                InlineKeyboardButton(text=f"⬆️x5 {p.name}", callback_data=f"product:upgrade:{p.id}:5"),
+                InlineKeyboardButton(text=f"⬆️x1 {p.name} 💰{upgrade_cost:,}", callback_data=f"product:upgrade:{p.id}:1"),
+                InlineKeyboardButton(text=f"⬆️x5 {p.name} 💰{x5_cost:,}", callback_data=f"product:upgrade:{p.id}:5"),
                 InlineKeyboardButton(text=f"🗑 下架", callback_data=f"product:delete:{p.id}:{company_id}"),
             ])
     else:
@@ -245,10 +268,14 @@ async def cb_product_list(callback: types.CallbackQuery, company_id: int | None 
 
     template_buttons = []
     if templates:
-        lines.append("\n🆕 可创建的产品:")
+        create_cost = max(
+            settings.product_create_cost,
+            int(settings.product_create_cost * (1 + len(products) * PRODUCT_CREATE_COST_GROWTH)),
+        )
+        lines.append(f"\n🆕 可创建的产品 (创建费💰{create_cost:,}):")
         template_buttons = [
             [InlineKeyboardButton(
-                text=f"{t['name']} (💰{t['base_daily_income']}/日)",
+                text=f"{t['name']} (收入{fmt_traffic(t['base_daily_income'])}/日)",
                 callback_data=f"product:create:{company_id}:{t['product_key']}",
             )]
             for t in templates
@@ -318,6 +345,10 @@ async def cb_upgrade_product(callback: types.CallbackQuery):
                 await callback.answer("请先 /company_create 创建公司", show_alert=True)
                 return
             for i in range(count):
+                if i > 0:
+                    # Clear cooldown set by previous iteration to allow batch upgrades
+                    r = await get_redis()
+                    await r.delete(f"product_upgrade_cd:{product_id}")
                 ok, msg = await upgrade_product(session, product_id, user.id)
                 if not ok:
                     if upgraded == 0:
