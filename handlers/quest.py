@@ -15,7 +15,6 @@ from services.quest_service import (
     claim_quest_reward,
     current_week_key,
     load_quests,
-    get_user_titles,
 )
 from services.user_service import get_user_by_tg_id
 from utils.panel_owner import mark_panel
@@ -56,14 +55,11 @@ def _quest_list_kb(tasks, tg_id: int | None = None) -> InlineKeyboardMarkup:
 async def _build_quest_text(user_id: int, tasks) -> str:
     week = current_week_key()
     completed = sum(1 for t in tasks if t.completed)
-    titles = await get_user_titles(user_id)
     lines = [
         f"🎯 周任务清单 ({week})",
         f"{'─' * 24}",
         f"进度: {completed}/{len(tasks)} 完成",
     ]
-    if titles:
-        lines.append(f"🏅 称号: {', '.join(titles)}")
     return "\n".join(lines)
 
 
@@ -79,7 +75,8 @@ async def cmd_quest(message: types.Message):
             tasks = await get_or_create_weekly_tasks(session, user.id)
 
     text = await _build_quest_text(user.id, tasks)
-    await message.answer(text, reply_markup=_quest_list_kb(tasks, tg_id=message.from_user.id))
+    sent = await message.reply(text, reply_markup=_quest_list_kb(tasks, tg_id=message.from_user.id))
+    await mark_panel(sent.chat.id, sent.message_id, message.from_user.id)
 
 
 @router.callback_query(F.data == "menu:quest")
@@ -143,8 +140,6 @@ async def cb_quest_detail(callback: types.CallbackQuery):
         reward_parts.append(f"积分+{q['reward_points']}")
     if q["reward_currency"]:
         reward_parts.append(f"+{fmt_traffic(q['reward_currency'])}")
-    if q.get("reward_title"):
-        reward_parts.append(f"称号「{q['reward_title']}」")
 
     await callback.answer(
         f"{q['name']}: {q['description']}\n奖励: {' | '.join(reward_parts)}",

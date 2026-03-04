@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import re
+import time
 
 from aiogram import F, Router, types
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import select
 
@@ -23,6 +26,11 @@ router = Router()
 
 # 分红税率使用统一税率
 DIVIDEND_TAX_RATE = settings.tax_rate
+DIVIDEND_INPUT_TIMEOUT_SECONDS = 5 * 60  # 自定义分红输入超时（5分钟）
+
+
+class DividendInputState(StatesGroup):
+    waiting_custom_amount = State()
 
 
 def _parse_amount(text: str) -> int | None:
@@ -49,6 +57,7 @@ def _dividend_amount_kb(company_id: int, tg_id: int) -> InlineKeyboardMarkup:
         )]
         for a in amounts
     ]
+    buttons.append([InlineKeyboardButton(text="✍️ 自定义金额（文本）", callback_data=f"dividend:input:{company_id}")])
     buttons.append([InlineKeyboardButton(text="🔙 返回股东", callback_data=f"shareholder:list:{company_id}")])
     return tag_kb(InlineKeyboardMarkup(inline_keyboard=buttons), tg_id)
 
@@ -336,6 +345,128 @@ async def cb_dividend_execute(callback: types.CallbackQuery):
 
     await callback.message.edit_text("\n".join(lines), reply_markup=kb)
     await callback.answer("分红发放成功!", show_alert=True)
+
+
+# ---- 自定义分红金额输入 ----
+
+@router.callback_query(F.data.startswith("dividend:input:"))
+async def cb_dividend_input(callback: types.CallbackQuery, state: FSMContext):
+    """Enter FSM for custom dividend amount input."""
+    company_id = int(callback.data.split(":")[2])
+    tg_id = callback.from_user.id
+
+    await state.set_state(DividendInputState.waiting_custom_amount)
+    await state.update_data(company_id=company_id, started_ts=int(time.time()))
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ 取消输入", callback_data=f"dividend:input_cancel:{company_id}")],
+        [InlineKeyboardButton(text="🔙 返回分红面板", callback_data=f"dividend:distribute:{company_id}")],
+    ])
+    await callback.message.edit_text(
+        "✍️ 自定义分红金额\n"
+        "请输入分红金额（整数，如 10000）\n"
+        f"⏳ {DIVIDEND_INPUT_TIMEOUT_SECONDS // 60} 分钟内未输入将自动退出",
+        reply_markup=tag_kb(kb, tg_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("dividend:input_cancel:"))
+async def cb_dividend_input_cancel(callback: types.CallbackQuery, state: FSMContext):
+    company_id = int(callback.data.split(":")[2])
+    await state.clear()
+    await callback.message.edit_text(
+        "选择分红总金额:",
+        reply_markup=_dividend_amount_kb(company_id, callback.from_user.id),
+    )
+    await callback.answer("已取消输入")
+
+
+@router.message(DividendInputState.waiting_custom_amount)
+async def on_custom_dividend_amount(message: types.Message, state: FSMContext):
+    """Handle custom dividend amount text input."""
+    data = await state.get_data()
+    company_id = int(data.get("company_id", 0))
+    started_ts = int(data.get("started_ts", 0))
+    now = int(time.time())
+
+    if company_id <= 0:
+        await state.clear()
+        await message.answer("分红状态异常，已退出。")
+        return
+
+    if started_ts <= 0 or now - started_ts > DIVIDEND_INPUT_TIMEOUT_SECONDS:
+        await state.clear()
+        await message.answer(
+            f"⏳ 分红输入超时（>{DIVIDEND_INPUT_TIMEOUT_SECONDS // 60}分钟），已自动退出。"
+        )
+        return
+
+    text = (message.text or "").strip()
+    if text.startswith("/"):
+        await state.clear()
+        await message.answer("已退出分红输入模式。")
+        return
+
+    amount = _parse_amount(text)
+    if amount is None:
+        left = max(1, DIVIDEND_INPUT_TIMEOUT_SECONDS - (now - started_ts))
+        await message.answer(
+            f"请输入有效金额（正整数，如 10000）。剩余时间约 {left // 60}分{left % 60}秒"
+        )
+        return
+
+    tg_id = message.from_user.id
+    async with async_session() as session:
+        async with session.begin():
+            user = await get_user_by_tg_id(session, tg_id)
+            if not user:
+                await state.clear()
+                await message.answer("请先 /company_create 创建公司")
+                return
+
+            company = await get_company_by_id(session, company_id)
+            if not company or company.owner_id != user.id:
+                await state.clear()
+                await message.answer("只有老板才能发放分红")
+                return
+
+            ok, msg, distributions = await _execute_dividend(session, company_id, amount)
+
+    await state.clear()
+
+    if not ok:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 返回分红面板", callback_data=f"dividend:distribute:{company_id}")],
+        ])
+        from utils.panel_owner import mark_panel
+        sent = await message.answer(f"❌ {msg}", reply_markup=tag_kb(kb, tg_id))
+        await mark_panel(message.chat.id, sent.message_id, tg_id)
+        return
+
+    lines = [
+        "✅ 分红发放成功!",
+        "─" * 24,
+        f"💸 分红总额: {fmt_traffic(amount)}",
+        f"📊 分红税率: {int(DIVIDEND_TAX_RATE * 100)}%",
+        "",
+        "👥 分配详情 (税后到账):",
+    ]
+    for name, shares, gross, net in distributions:
+        lines.append(f"  • {name} ({fmt_shares(shares)}): {fmt_traffic(gross)} → {fmt_traffic(net)}")
+
+    total_net = sum(d[3] for d in distributions)
+    total_tax = sum(d[2] - d[3] for d in distributions)
+    lines.append("")
+    lines.append(f"💰 实际到账: {fmt_traffic(total_net)}")
+    lines.append(f"🏛️ 税金扣除: {fmt_traffic(total_tax)}")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 返回股东列表", callback_data=f"shareholder:list:{company_id}")],
+    ])
+    from utils.panel_owner import mark_panel
+    sent = await message.answer("\n".join(lines), reply_markup=tag_kb(kb, tg_id))
+    await mark_panel(message.chat.id, sent.message_id, tg_id)
 
 
 @router.callback_query(F.data.startswith("dividend:history:"))

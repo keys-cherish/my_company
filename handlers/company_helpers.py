@@ -9,12 +9,12 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from sqlalchemy import select, func as sqlfunc
+from sqlalchemy import select
 
 from cache.redis_client import get_redis
 from config import settings as cfg
 from db.engine import async_session
-from db.models import DailyReport, Product, ResearchProgress, Shareholder, User
+from db.models import DailyReport, Product, User
 from keyboards.menus import company_detail_kb, tag_kb
 from services.ad_service import get_ad_boost
 from services.battle_service import get_company_revenue_debuff
@@ -22,17 +22,13 @@ from services.company_service import (
     get_company_by_id,
     get_company_employee_limit,
     get_company_type_info,
-    get_company_valuation,
     get_level_info,
+    get_max_level,
     get_level_revenue_bonus,
     load_company_types,
 )
 from services.cooperation_service import get_cooperation_bonus
 from services.operations_service import (
-    INSURANCE_LEVELS,
-    OFFICE_LEVELS,
-    TRAINING_LEVELS,
-    WORK_HOUR_OPTIONS,
     bar10,
     calc_immoral_buff,
     calc_extra_operating_costs,
@@ -55,7 +51,6 @@ from services.shop_service import get_income_buff_multiplier
 from services.user_service import get_user_by_tg_id
 from utils.formatters import fmt_duration, fmt_quota, fmt_traffic, reputation_buff_multiplier
 from utils.panel_owner import mark_panel
-from utils.timezone import naive_utc_to_bj
 
 
 # ── FSM 状态组 ────────────────────────────────────────
@@ -103,23 +98,12 @@ async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, Inlin
         if not company:
             return "公司不存在", InlineKeyboardMarkup(inline_keyboard=[])
         user = await get_user_by_tg_id(session, tg_id)
-        valuation = await get_company_valuation(session, company)
         is_owner = user and company.owner_id == user.id
         owner = await session.get(User, company.owner_id)
-
-        sh_count = (await session.execute(
-            select(sqlfunc.count()).where(Shareholder.company_id == company_id)
-        )).scalar()
         products = (await session.execute(
             select(Product).where(Product.company_id == company_id).order_by(Product.quality.desc(), Product.id.asc())
         )).scalars().all()
         prod_count = len(products)
-        tech_count = (await session.execute(
-            select(sqlfunc.count()).where(
-                ResearchProgress.company_id == company_id,
-                ResearchProgress.status == "completed",
-            )
-        )).scalar()
         estate_income = await get_total_estate_income(session, company_id)
         coop_bonus_rate = await get_cooperation_bonus(session, company_id)
         battle_debuff_rate = await get_company_revenue_debuff(company_id)
@@ -130,6 +114,10 @@ async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, Inlin
         _r = await get_redis()
         _rename_pen_str = await _r.get(f"rename_penalty:{company_id}")
         rename_penalty_rate = float(_rename_pen_str) if _rename_pen_str else 0.0
+        _roadshow_pen_str = await _r.get(f"roadshow_penalty:{company_id}")
+        roadshow_penalty_rate = float(_roadshow_pen_str) if _roadshow_pen_str else 0.0
+        _totalwar_str = await _r.get(f"totalwar_buff:{company_id}")
+        totalwar_buff_rate = float(_totalwar_str) if _totalwar_str else 0.0
         profile = await get_or_create_profile(session, company_id)
         # 获取进行中的科研
         await sync_research_progress_if_due(session, company_id)
@@ -140,6 +128,19 @@ async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, Inlin
 
     level_info = get_level_info(company.level)
     level_name = level_info["name"] if level_info else f"Lv.{company.level}"
+    max_level = max(1, get_max_level())
+    if company.level >= max_level:
+        level_badge = "👑"
+    elif company.level >= 8:
+        level_badge = "💎"
+    elif company.level >= 6:
+        level_badge = "🏆"
+    elif company.level >= 4:
+        level_badge = "🥇"
+    elif company.level >= 2:
+        level_badge = "🥈"
+    else:
+        level_badge = "🥉"
     level_rev_bonus = get_level_revenue_bonus(company.level)
     max_employees = get_company_employee_limit(company.level, company.company_type)
 
@@ -160,6 +161,26 @@ async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, Inlin
     type_income = int(product_income * type_income_bonus)
     immoral_mult = calc_immoral_buff(profile.ethics)
     immoral_buff_income = int(product_income * (immoral_mult - 1.0)) if immoral_mult > 1.0 else 0
+
+    # Buff summary (for concise company panel):
+    # - gain/loss represent additive rate summary of active effects (excluding market cycle shown elsewhere).
+    effect_rates = [
+        multipliers["income_mult"] - 1.0,         # work/office/training/culture combined
+        rep_multiplier - 1.0,                     # reputation
+        coop_bonus_rate,                          # cooperation
+        ad_boost_rate,                            # ad
+        shop_buff_mult - 1.0,                     # shop buff
+        type_income_bonus,                        # company type income bonus
+        (immoral_mult - 1.0) if immoral_mult > 1.0 else 0.0,
+        totalwar_buff_rate,                       # total war temporary buff
+        -battle_debuff_rate,                      # battle debuff
+        -rename_penalty_rate,                     # rename penalty
+        -roadshow_penalty_rate,                   # roadshow penalty
+    ]
+    buff_gain_rate = sum(v for v in effect_rates if v > 0)
+    buff_loss_rate = sum(-v for v in effect_rates if v < 0)
+    buff_net_rate = buff_gain_rate - buff_loss_rate
+    active_effect_count = sum(1 for v in effect_rates if abs(v) >= 0.001)
     estimated_income = (
         product_income
         + level_rev_bonus
@@ -218,15 +239,6 @@ async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, Inlin
                 rlines.append(f"  • {name} — 即将完成")
         research_block = "⏳ 研究中:\n" + "\n".join(rlines) + "\n"
 
-    work_info = WORK_HOUR_OPTIONS.get(profile.work_hours, WORK_HOUR_OPTIONS[8])
-    office_info = OFFICE_LEVELS.get(profile.office_level, OFFICE_LEVELS["standard"])
-    training_info = TRAINING_LEVELS.get(profile.training_level, TRAINING_LEVELS["none"])
-    insurance_info = INSURANCE_LEVELS.get(profile.insurance_level, INSURANCE_LEVELS["basic"])
-    training_line = f"🏅 培训中：{training_info['name']}（×{multipliers['training']['income_mult']:.2f}）"
-    if profile.training_expires_at and profile.training_level != "none":
-        expire_bj = naive_utc_to_bj(profile.training_expires_at).strftime("%m-%d %H:%M")
-        training_line = f"🏅 培训中：{training_info['name']}（×{multipliers['training']['income_mult']:.2f}，到期 {expire_bj}）"
-
     products_block: list[str] = []
     if products:
         for p in products[:3]:
@@ -250,28 +262,19 @@ async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, Inlin
     text = (
         f"🏢 {company.name}\n\n"
         f"🖥️ 行业：{type_display} {market['label']} {market_effect}\n"
-        f"📊 等级：Lv.{company.level} {level_name}\n"
+        f"📊 等级：{level_badge}【Lv.{company.level} {level_name}】[{bar10(company.level, 1, max_level)}]\n"
         f"⭐ 声望：{rep_value}（评级 {reputation_rating(rep_value)}）\n"
         f"👥 员工：{company.employee_count}/{max_employees}\n"
         f"💰 积分余额：{fmt_quota(company.total_funds)}\n"
         f"😐 道德：{profile.ethics} [{bar10(profile.ethics, -100, 100)}] {ethics_rating(profile.ethics)}\n"
-        f"{'😈 缺德buff：营收+' + str(int((immoral_mult - 1) * 100)) + '%' + chr(10) if immoral_buff_income > 0 else ''}"
         f"\n"
         f"📈 预估日营收：{fmt_quota(estimated_income)}\n"
         f"  产品收入：{fmt_quota(product_income)} | 地产收入：{fmt_quota(estate_income)}\n"
         f"📉 预估日成本：{fmt_quota(estimated_cost)}\n"
         f"💵 预估日净利：{'+' if estimated_profit >= 0 else ''}{fmt_quota(estimated_profit)}\n\n"
-        f"⏰ 工时：{profile.work_hours}h {work_info['label']}（营收×{work_info['income_mult']:.1f}）\n"
-        f"🌆 办公：{office_info['name']}（营收×{office_info['income_mult']:.1f}）\n"
-        f"{training_line}\n"
-        f"👑 保险：{insurance_info['name']}（罚款-{int(insurance_info['fine_reduction'] * 100)}%）\n"
-        f"🎭 文化：{profile.culture}/100（营收+{profile.culture/10:.1f}%，风险-{profile.culture * 0.3:.1f}%）\n"
-        f"🛂 监管：{profile.regulation_pressure}/100（超8h自动涨，≤8h自动降）\n"
-        f"🤝 合作Buff：+{coop_bonus_rate*100:.0f}%（当日）\n"
-        f"⚔️ 商战Debuff：-{battle_debuff_rate*100:.0f}%\n"
-        f"{'✏️ 改名Debuff：-' + str(int(rename_penalty_rate*100)) + '%（结算后恢复）' + chr(10) if rename_penalty_rate > 0 else ''}"
-        f"🏷 估值：{fmt_quota(valuation)}\n"
-        f"👥 股东:{sh_count} | 🔬 科技:{tech_count}\n"
+        f"✨ Buff总览：增益 +{buff_gain_rate*100:.0f}% | 减益 -{buff_loss_rate*100:.0f}% | "
+        f"净影响 {'+' if buff_net_rate >= 0 else '-'}{abs(buff_net_rate)*100:.0f}%（{active_effect_count}项）\n"
+        f"   详细说明请查看「✨ Buff一览」\n"
         f"{'─' * 24}\n"
         f"{research_block}"
         f"📦 产品（{prod_count}个）：\n"
@@ -467,7 +470,7 @@ async def _start_company_type_selection(message: types.Message, state: FSMContex
         "🏢 创建公司\n选择公司类型:\n\n" +
         "\n".join(f"{info['emoji']} {info['name']} — {info['description']}" for info in types_data.values())
     )
-    sent = await message.answer(
+    sent = await message.reply(
         text,
         reply_markup=tag_kb(
             InlineKeyboardMarkup(inline_keyboard=buttons),

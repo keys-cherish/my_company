@@ -170,3 +170,6 @@ async def cb_start_research(callback: types.CallbackQuery):
             ok, msg = await start_research(session, company_id, user.id, tech_id)
 
     await callback.answer(msg, show_alert=True)
+    if ok:
+        # Refresh the research list panel
+        await cb_research_list(callback, company_id)

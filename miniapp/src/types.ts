@@ -31,7 +31,6 @@ export interface MiniAppPreload {
     traffic: number;
     reputation: number;
     points: number;
-    quota_mb: number;
   } | null;
   companies: MiniAppCompanySummary[];
   active_company: MiniAppActiveCompany | null;

@@ -29,6 +29,7 @@ async def cmd_slot(message: types.Message):
     result_text = await do_spin(tg_id)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎰 再来一次!", callback_data="slot:spin")],
+        [InlineKeyboardButton(text="🔙 返回主菜单", callback_data="menu:main")],
     ])
     try:
         sent = await message.reply(result_text, reply_markup=tag_kb(kb, tg_id))
@@ -53,6 +54,7 @@ async def cb_slot_spin(callback: types.CallbackQuery):
     result_text = await do_spin(tg_id)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎰 再来一次!", callback_data="slot:spin")],
+        [InlineKeyboardButton(text="🔙 返回主菜单", callback_data="menu:main")],
     ])
     try:
         await callback.message.edit_text(result_text, reply_markup=tag_kb(kb, tg_id))

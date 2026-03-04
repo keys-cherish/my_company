@@ -303,6 +303,20 @@ async def cb_ops_train(callback: types.CallbackQuery):
 
     training_info = get_training_info(profile, dt.datetime.now(dt.UTC))
 
+    # Guard: prevent downgrading to a lower training level
+    if training_info["active"]:
+        level_order = ["none", "basic", "pro", "elite"]
+        current_idx = level_order.index(training_info["key"]) if training_info["key"] in level_order else 0
+        new_idx = level_order.index(level) if level in level_order else 0
+        if new_idx <= current_idx:
+            cur_info = TRAINING_LEVELS.get(training_info["key"], TRAINING_LEVELS["none"])
+            await callback.answer(
+                f"当前「{cur_info['name']}」(x{cur_info['income_mult']:.2f}) 等级更高，"
+                f"无法降级为「{info['name']}」(x{info['income_mult']:.2f})",
+                show_alert=True,
+            )
+            return
+
     total_cost = company.employee_count * info["hourly_cost"] * info["duration_hours"]
     lines = [
         f"🏅 {info['name']}确认",

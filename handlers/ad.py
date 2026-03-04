@@ -14,6 +14,18 @@ from handlers.company_helpers import _refresh_company_view
 router = Router()
 
 
+def _promo_menu_kb(company_id: int, tg_id: int | None = None):
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🎤 路演", callback_data=f"roadshow:do:{company_id}"),
+            InlineKeyboardButton(text="📢 广告", callback_data=f"ad:menu:{company_id}"),
+        ],
+        [InlineKeyboardButton(text="🔙 返回公司", callback_data=f"company:view:{company_id}")],
+    ])
+    return tag_kb(kb, tg_id)
+
+
 def _ad_menu_kb(company_id: int, tg_id: int | None = None):
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
     tiers = get_ad_tiers()
@@ -24,8 +36,34 @@ def _ad_menu_kb(company_id: int, tg_id: int | None = None):
         )]
         for t in tiers
     ]
-    buttons.append([InlineKeyboardButton(text="🔙 返回", callback_data=f"company:view:{company_id}")])
+    buttons.append([InlineKeyboardButton(text="🔙 返回推广", callback_data=f"promo:menu:{company_id}")])
     return tag_kb(InlineKeyboardMarkup(inline_keyboard=buttons), tg_id)
+
+
+@router.callback_query(F.data.startswith("promo:menu:"))
+async def cb_promo_menu(callback: types.CallbackQuery):
+    company_id = int(callback.data.split(":")[2])
+    tg_id = callback.from_user.id
+
+    async with async_session() as session:
+        user = await get_user_by_tg_id(session, tg_id)
+        company = await get_company_by_id(session, company_id)
+        if not user:
+            await callback.answer("请先 /company_create 创建公司", show_alert=True)
+            return
+        if not company or company.owner_id != user.id:
+            await callback.answer("无权操作", show_alert=True)
+            return
+
+    text = (
+        "📣 推广中心\n"
+        f"{'─' * 24}\n"
+        "选择推广方式：\n"
+        "• 🎤 路演：立即执行，获得随机推广收益\n"
+        "• 📢 广告：购买持续生效的营收加成"
+    )
+    await callback.message.edit_text(text, reply_markup=_promo_menu_kb(company_id, tg_id=tg_id))
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("ad:menu:"))
@@ -55,7 +93,7 @@ async def cb_ad_menu(callback: types.CallbackQuery):
         )
         from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
         kb = tag_kb(InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 返回", callback_data=f"company:view:{company_id}")]
+            [InlineKeyboardButton(text="🔙 返回推广", callback_data=f"promo:menu:{company_id}")]
         ]), tg_id)
         await callback.message.edit_text(text, reply_markup=kb)
     else:

@@ -89,5 +89,5 @@ async def _do_checkin(event: types.Message | types.CallbackQuery, tg_id: int, *,
         await callback.answer()
     else:
         message = event
-        sent = await message.answer(msg, reply_markup=kb)
+        sent = await message.reply(msg, reply_markup=kb)
         await mark_panel(sent.chat.id, sent.message_id, tg_id)

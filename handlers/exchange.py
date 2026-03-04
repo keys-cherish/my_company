@@ -35,19 +35,77 @@ router = Router()
 
 # ========== 交易所主菜单 ==========
 
-def _exchange_menu_kb(tg_id: int | None = None) -> InlineKeyboardMarkup:
+def _normalize_source(raw: str | None) -> str:
+    """Normalize source marker to: main | company:<id>."""
+    if not raw:
+        return "main"
+    if raw == "main":
+        return "main"
+    if raw.startswith("company:"):
+        cid = raw.split(":", 1)[1]
+        if cid.isdigit():
+            return f"company:{int(cid)}"
+    if raw.startswith("company_"):
+        cid = raw.split("_", 1)[1]
+        if cid.isdigit():
+            return f"company:{int(cid)}"
+    return "main"
+
+
+def _source_to_token(source: str) -> str:
+    src = _normalize_source(source)
+    if src == "main":
+        return "main"
+    cid = src.split(":", 1)[1]
+    return f"company_{cid}"
+
+
+def _token_to_source(token: str | None) -> str:
+    if not token:
+        return "main"
+    return _normalize_source(token)
+
+
+def _extract_exchange_source(data: str) -> str:
+    # Legacy callback compatibility.
+    if data == "menu:exchange":
+        return "main"
+    if data.startswith("menu:exchange:"):
+        return _normalize_source(data.removeprefix("menu:exchange:"))
+    return "main"
+
+
+def _exchange_entry_callback(source: str) -> str:
+    src = _normalize_source(source)
+    if src == "main":
+        return "menu:exchange:main"
+    return f"menu:exchange:{src}"
+
+
+def _exchange_back_callback(source: str) -> str:
+    src = _normalize_source(source)
+    if src == "main":
+        return "menu:main"
+    cid = src.split(":", 1)[1]
+    return f"company:view:{cid}"
+
+
+def _exchange_menu_kb(tg_id: int | None = None, source: str = "main") -> InlineKeyboardMarkup:
+    token = _source_to_token(source)
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📶 积分→流量", callback_data="exchange:traffic")],
-        [InlineKeyboardButton(text="🛒 道具商城", callback_data="shop:list")],
-        [InlineKeyboardButton(text="🌙 黑市特惠", callback_data="blackmarket:list")],
-        [InlineKeyboardButton(text="🔙 返回", callback_data="menu:company")],
+        [InlineKeyboardButton(text="📶 积分→流量", callback_data=f"exchange:traffic:{token}")],
+        [InlineKeyboardButton(text="🛒 道具商城", callback_data=f"shop:list:{token}")],
+        [InlineKeyboardButton(text="🌙 黑市特惠", callback_data=f"blackmarket:list:{token}")],
+        [InlineKeyboardButton(text="🔙 返回", callback_data=_exchange_back_callback(source))],
     ])
     return tag_kb(kb, tg_id)
 
 
 @router.callback_query(F.data == "menu:exchange")
+@router.callback_query(F.data.startswith("menu:exchange:"))
 async def cb_exchange_menu(callback: types.CallbackQuery):
     tg_id = callback.from_user.id
+    source = _extract_exchange_source(callback.data or "menu:exchange")
     rate = cfg.traffic_exchange_rate
     limit_mb = cfg.traffic_exchange_daily_limit_mb
 
@@ -65,15 +123,16 @@ async def cb_exchange_menu(callback: types.CallbackQuery):
         f"{'─' * 24}\n"
         f"个人积分可兑换真实手机流量！"
     )
-    await callback.message.edit_text(text, reply_markup=_exchange_menu_kb(tg_id))
+    await callback.message.edit_text(text, reply_markup=_exchange_menu_kb(tg_id, source=source))
     await callback.answer()
 
 
 # ========== 积分 → 流量 ==========
 
-def _traffic_amounts_kb(tg_id: int | None = None) -> InlineKeyboardMarkup:
+def _traffic_amounts_kb(tg_id: int | None = None, source: str = "main") -> InlineKeyboardMarkup:
     """流量兑换金额选择。"""
     rate = cfg.traffic_exchange_rate
+    token = _source_to_token(source)
     # 预设兑换选项: MB数 -> 所需积分
     options = [
         (100, rate * 100),        # 100MB
@@ -84,17 +143,16 @@ def _traffic_amounts_kb(tg_id: int | None = None) -> InlineKeyboardMarkup:
     ]
     buttons = [
         [InlineKeyboardButton(
-            text=f"{fmt_real_traffic(mb)} ← {credits:,} 积分",
-            callback_data=f"exchange:traffic:{mb}",
+            text=f"{credits:,} 积分 → {fmt_real_traffic(mb)}",
+            callback_data=f"exchange:traffic:do:{mb}:{token}",
         )]
         for mb, credits in options
     ]
-    buttons.append([InlineKeyboardButton(text="🔙 返回交易所", callback_data="menu:exchange")])
+    buttons.append([InlineKeyboardButton(text="🔙 返回交易所", callback_data=_exchange_entry_callback(source))])
     return tag_kb(InlineKeyboardMarkup(inline_keyboard=buttons), tg_id)
 
 
-@router.callback_query(F.data == "exchange:traffic")
-async def cb_traffic_menu(callback: types.CallbackQuery):
+async def _render_traffic_menu(callback: types.CallbackQuery, source: str = "main"):
     tg_id = callback.from_user.id
     rate = cfg.traffic_exchange_rate
     limit_mb = cfg.traffic_exchange_daily_limit_mb
@@ -114,18 +172,16 @@ async def cb_traffic_menu(callback: types.CallbackQuery):
         f"📶 积分 → 流量\n"
         f"{'─' * 24}\n"
         f"💱 兑换比例: {rate} 积分 = 1MB\n"
-        f"💰 当前积分: {fmt_traffic(balance)}\n"
+        f"💰 当前个人积分: {fmt_traffic(balance)}\n"
         f"📊 今日剩余额度: {fmt_real_traffic(remaining)}\n"
         f"{'─' * 24}\n"
         f"选择兑换数量 👇"
     )
-    await callback.message.edit_text(text, reply_markup=_traffic_amounts_kb(tg_id))
+    await callback.message.edit_text(text, reply_markup=_traffic_amounts_kb(tg_id, source=source))
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("exchange:traffic:"))
-async def cb_traffic_do(callback: types.CallbackQuery):
-    mb_amount = int(callback.data.split(":")[2])
+async def _do_traffic_exchange(callback: types.CallbackQuery, mb_amount: int):
     tg_id = callback.from_user.id
     rate = cfg.traffic_exchange_rate
     credits_needed = mb_amount * rate
@@ -183,6 +239,38 @@ async def cb_traffic_do(callback: types.CallbackQuery):
         f"流量将在24小时内到账",
         show_alert=True,
     )
+
+
+@router.callback_query(F.data == "exchange:traffic")
+@router.callback_query(F.data.startswith("exchange:traffic:"))
+async def cb_traffic_route(callback: types.CallbackQuery):
+    data = callback.data or "exchange:traffic"
+    parts = data.split(":")
+
+    # Legacy: exchange:traffic
+    if data == "exchange:traffic":
+        await _render_traffic_menu(callback, source="main")
+        return
+
+    # New: exchange:traffic:do:<mb>:<source_token>
+    if len(parts) >= 4 and parts[2] == "do":
+        try:
+            mb_amount = int(parts[3])
+        except ValueError:
+            await callback.answer("无效兑换数量", show_alert=True)
+            return
+        await _do_traffic_exchange(callback, mb_amount)
+        return
+
+    # Legacy: exchange:traffic:<mb>
+    if len(parts) == 3 and parts[2].isdigit():
+        await _do_traffic_exchange(callback, int(parts[2]))
+        return
+
+    # New: exchange:traffic:<source_token>
+    source_token = parts[2] if len(parts) >= 3 else "main"
+    source = _token_to_source(source_token)
+    await _render_traffic_menu(callback, source=source)
 
 
 # ========== /company_exchange 命令 ==========
@@ -272,7 +360,14 @@ async def cmd_exchange(message: types.Message):
 # ========== 道具商城 ==========
 
 @router.callback_query(F.data == "shop:list")
+@router.callback_query(F.data.startswith("shop:list:"))
 async def cb_shop_list(callback: types.CallbackQuery):
+    source_token = "main"
+    if callback.data and callback.data.startswith("shop:list:"):
+        source_token = callback.data.split(":", 2)[2]
+    source = _token_to_source(source_token)
+    source_token = _source_to_token(source)
+
     items = load_shop_items()
 
     lines = ["🛒 道具商城", "─" * 24]
@@ -283,10 +378,10 @@ async def cb_shop_list(callback: types.CallbackQuery):
         lines.append("")
         buttons.append([InlineKeyboardButton(
             text=f"{item['name']} ({item['price']:,}💰)",
-            callback_data=f"shop:select:{key}",
+            callback_data=f"shop:select:{key}:{source_token}",
         )])
 
-    buttons.append([InlineKeyboardButton(text="🔙 返回", callback_data="menu:exchange")])
+    buttons.append([InlineKeyboardButton(text="🔙 返回", callback_data=_exchange_entry_callback(source))])
 
     await callback.message.edit_text(
         "\n".join(lines),
@@ -298,7 +393,12 @@ async def cb_shop_list(callback: types.CallbackQuery):
 @router.callback_query(F.data.startswith("shop:select:"))
 async def cb_shop_select(callback: types.CallbackQuery):
     """Show item detail and ask which company to apply the buff to."""
-    item_key = callback.data.split(":")[2]
+    parts = callback.data.split(":")
+    item_key = parts[2]
+    source_token = parts[3] if len(parts) >= 4 else "main"
+    source = _token_to_source(source_token)
+    source_token = _source_to_token(source)
+
     items = load_shop_items()
     if item_key not in items:
         await callback.answer("无效道具", show_alert=True)
@@ -327,10 +427,10 @@ async def cb_shop_select(callback: types.CallbackQuery):
     # Multiple companies
     item = items[item_key]
     buttons = [
-        [InlineKeyboardButton(text=c.name, callback_data=f"shop:buy:{item_key}:{c.id}")]
+        [InlineKeyboardButton(text=c.name, callback_data=f"shop:buy:{item_key}:{c.id}:{source_token}")]
         for c in companies
     ]
-    buttons.append([InlineKeyboardButton(text="🔙 返回", callback_data="shop:list")])
+    buttons.append([InlineKeyboardButton(text="🔙 返回", callback_data=f"shop:list:{source_token}")])
 
     await callback.message.edit_text(
         f"为哪家公司购买 {item['name']}?",
@@ -364,7 +464,14 @@ async def cb_shop_buy(callback: types.CallbackQuery):
 # ========== 黑市特惠 ==========
 
 @router.callback_query(F.data == "blackmarket:list")
+@router.callback_query(F.data.startswith("blackmarket:list:"))
 async def cb_blackmarket_list(callback: types.CallbackQuery):
+    source_token = "main"
+    if callback.data and callback.data.startswith("blackmarket:list:"):
+        source_token = callback.data.split(":", 2)[2]
+    source = _token_to_source(source_token)
+    source_token = _source_to_token(source)
+
     deals = await get_black_market_items()
 
     lines = ["🌙 黑市特惠 — 每日刷新，先到先得", "─" * 24]
@@ -380,13 +487,13 @@ async def cb_blackmarket_list(callback: types.CallbackQuery):
         if deal['stock'] > 0:
             buttons.append([InlineKeyboardButton(
                 text=f"购买 {deal['name']} ({deal['price']:,}💰)",
-                callback_data=f"blackmarket:select:{i}",
+                callback_data=f"blackmarket:select:{i}:{source_token}",
             )])
 
     if not deals:
         lines.append("今日暂无特惠")
 
-    buttons.append([InlineKeyboardButton(text="🔙 返回", callback_data="menu:exchange")])
+    buttons.append([InlineKeyboardButton(text="🔙 返回", callback_data=_exchange_entry_callback(source))])
 
     await callback.message.edit_text(
         "\n".join(lines),
@@ -397,7 +504,12 @@ async def cb_blackmarket_list(callback: types.CallbackQuery):
 
 @router.callback_query(F.data.startswith("blackmarket:select:"))
 async def cb_blackmarket_select(callback: types.CallbackQuery):
-    index = int(callback.data.split(":")[2])
+    parts = callback.data.split(":")
+    index = int(parts[2])
+    source_token = parts[3] if len(parts) >= 4 else "main"
+    source = _token_to_source(source_token)
+    source_token = _source_to_token(source)
+
     tg_id = callback.from_user.id
 
     async with async_session() as session:
@@ -419,10 +531,10 @@ async def cb_blackmarket_select(callback: types.CallbackQuery):
         return
 
     buttons = [
-        [InlineKeyboardButton(text=c.name, callback_data=f"blackmarket:buy:{index}:{c.id}")]
+        [InlineKeyboardButton(text=c.name, callback_data=f"blackmarket:buy:{index}:{c.id}:{source_token}")]
         for c in companies
     ]
-    buttons.append([InlineKeyboardButton(text="🔙 返回", callback_data="blackmarket:list")])
+    buttons.append([InlineKeyboardButton(text="🔙 返回", callback_data=f"blackmarket:list:{source_token}")])
 
     await callback.message.edit_text(
         "为哪家公司购买黑市道具?",

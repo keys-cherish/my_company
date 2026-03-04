@@ -32,9 +32,10 @@ def _estate_list_kb(estates, buildings, company_id: int, tg_id: int, owned_count
     """Build the estate list keyboard with buy + upgrade buttons."""
     buttons = []
 
-    # Upgrade buttons for owned estates
+    # Upgrade buttons for owned estates (sorted by building type then level)
     if estates:
-        for e in estates:
+        sorted_estates = sorted(estates, key=lambda e: (e.building_type, e.level))
+        for e in sorted_estates:
             if e.level < MAX_BUILDING_LEVEL:
                 bld = get_building_info(e.building_type)
                 cost = calc_upgrade_cost(bld, e.level) if bld else 0
@@ -61,8 +62,10 @@ async def _render_estate_list(company, estates, owned_counts: dict) -> str:
     """Render the estate list text."""
     lines = [f"🏗 {company.name} — 地产", "─" * 24]
     if estates:
+        # Sort by building type then level for consistent display
+        sorted_estates = sorted(estates, key=lambda e: (e.building_type, e.level))
         total_income = 0
-        for e in estates:
+        for e in sorted_estates:
             bld = get_building_info(e.building_type)
             name = bld["name"] if bld else e.building_type
             lines.append(f"• {name} Lv.{e.level} — {fmt_traffic(e.daily_dividend)}/日")
@@ -73,7 +76,9 @@ async def _render_estate_list(company, estates, owned_counts: dict) -> str:
 
     lines.append(f"\n🏪 可购买地产（点击查看详情）:")
     buildings = get_building_list()
-    for b in buildings:
+    # Sort by purchase price for consistent display
+    buildings_sorted = sorted(buildings, key=lambda b: b["purchase_price"])
+    for b in buildings_sorted:
         owned = owned_counts.get(b["key"], 0)
         max_c = b.get("max_count", 99)
         roi_days = b["purchase_price"] // b["daily_dividend"] if b["daily_dividend"] > 0 else 999

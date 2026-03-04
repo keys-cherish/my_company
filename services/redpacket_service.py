@@ -201,3 +201,41 @@ async def find_lucky_king(packet_id: str) -> tuple[int, int] | None:
     if not results:
         return None
     return max(results, key=lambda x: x[1])
+
+
+async def save_grabber_display_name(packet_id: str, tg_id: int, display_name: str) -> None:
+    """Persist grabber display name snapshot for detail rendering."""
+    name = (display_name or "").strip().replace("\n", " ")
+    if not name:
+        return
+    if len(name) > 48:
+        name = name[:48]
+
+    r = await get_redis()
+    name_key = f"redpacket_names:{packet_id}"
+    await r.hset(name_key, str(tg_id), name)
+
+    ttl = await r.ttl(f"redpacket:{packet_id}")
+    if ttl and ttl > 0:
+        await r.expire(name_key, ttl)
+    else:
+        await r.expire(name_key, settings.redpacket_expire_seconds)
+
+
+async def get_grabber_display_names(packet_id: str) -> dict[int, str]:
+    """Get cached grabber display names keyed by tg_id."""
+    r = await get_redis()
+    raw = await r.hgetall(f"redpacket_names:{packet_id}")
+    if not raw:
+        return {}
+
+    result: dict[int, str] = {}
+    for k, v in raw.items():
+        try:
+            tid = int(k if isinstance(k, str) else k.decode())
+        except (ValueError, TypeError):
+            continue
+        name = v if isinstance(v, str) else v.decode()
+        if name:
+            result[tid] = name
+    return result

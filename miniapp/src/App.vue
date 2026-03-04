@@ -51,7 +51,6 @@ const fmt = (num: number | undefined) => {
               <div class="line">��ң�{{ fmt(user?.traffic) }}</div>
               <div class="line">������{{ fmt(user?.reputation) }}</div>
               <div class="line">���֣�{{ fmt(user?.points) }}</div>
-              <div class="line">储备积分：{{ fmt(user?.quota_mb) }} 积分</div>
             </template>
           </van-card>
 

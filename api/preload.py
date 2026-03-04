@@ -12,7 +12,7 @@ from cache.redis_client import get_redis
 from db.engine import async_session
 from db.models import Product, ResearchProgress, Shareholder
 from services.company_service import get_companies_by_owner
-from services.user_service import get_or_create_user, get_points, get_quota_mb, get_user_by_tg_id
+from services.user_service import get_or_create_user, get_points, get_user_by_tg_id
 
 _PRELOAD_CACHE_PREFIX = "miniapp:preload"
 
@@ -99,7 +99,7 @@ async def _build_preload_payload(tg_id: int, company_id: int | None) -> dict[str
                 ],
             }
 
-    points, quota = await _load_points_and_quota(tg_id)
+    points = await get_points(tg_id)
     company_list = [_safe_company_summary(c) for c in companies]
     return {
         "user": {
@@ -109,7 +109,6 @@ async def _build_preload_payload(tg_id: int, company_id: int | None) -> dict[str
             "traffic": int(user.traffic),
             "reputation": int(user.reputation),
             "points": int(points),
-            "quota_mb": int(quota),
         },
         "companies": company_list,
         "active_company": active_company_payload,
@@ -118,13 +117,6 @@ async def _build_preload_payload(tg_id: int, company_id: int | None) -> dict[str
             "company_count": len(company_list),
         },
     }
-
-
-async def _load_points_and_quota(tg_id: int) -> tuple[int, int]:
-    points = await get_points(tg_id)
-    quota = await get_quota_mb(tg_id)
-    return points, quota
-
 
 async def _get_cached_preload(tg_id: int, company_id: int | None) -> dict[str, Any] | None:
     r = await get_redis()

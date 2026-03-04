@@ -78,10 +78,11 @@ async def cmd_cooperate(message: types.Message):
         await message.answer(
             "🤝 合作命令:\n"
             "  回复某人消息 + 发送「合作」— 直接合作\n"
-            "  /company_cooperate all — 一键与所有公司合作\n"
+            "  <code>/company_cooperate all</code> — 一键与所有公司合作\n"
             "每次合作+2%营收（上限50%），次日结算后清空需重新合作\n"
             "双方各 +30 声望\n"
-            "合作数量不限，但buff上限50%"
+            "合作数量不限，但buff上限50%",
+            parse_mode="HTML",
         )
         return
 
@@ -157,9 +158,10 @@ async def cb_coop_menu(callback: types.CallbackQuery):
     await callback.message.edit_text(
         "🤝 选择公司查看合作状态:\n\n"
         "💡 也可以使用命令:\n"
-        "  /company_cooperate all — 一键全部合作\n"
+        "  <code>/company_cooperate all</code> — 一键全部合作\n"
         "  回复某人消息 + 发送「合作」",
         reply_markup=kb,
+        parse_mode="HTML",
     )
     await callback.answer()
 
@@ -182,8 +184,11 @@ async def cb_init_coop(callback: types.CallbackQuery):
             return
 
         coops = await get_active_cooperations(session, company_id)
-        current_total = sum(c.bonus_multiplier for c in coops)
-        lines = [f"🤝 {company.name} 合作状态 (加成: {current_total*100:.0f}%)", f"{'─' * 24}"]
+        raw_total = sum(c.bonus_multiplier for c in coops)
+        from services.cooperation_service import COOP_BUFF_CAP
+        capped_total = min(raw_total, COOP_BUFF_CAP)
+        cap_note = f" ⚠️已达上限" if raw_total > COOP_BUFF_CAP else ""
+        lines = [f"🤝 {company.name} 合作状态 (有效加成: {capped_total*100:.0f}%{cap_note})", f"{'─' * 24}"]
         if coops:
             for c in coops:
                 partner_id = c.company_b_id if c.company_a_id == company_id else c.company_a_id
@@ -195,13 +200,13 @@ async def cb_init_coop(callback: types.CallbackQuery):
 
     lines.append(f"\n💡 合作方式:")
     lines.append(f"  • 回复某人消息 + 发送「合作」")
-    lines.append(f"  • /company_cooperate all — 一键全部合作")
+    lines.append(f"  • <code>/company_cooperate all</code> — 一键全部合作")
     lines.append(f"\n🎁 合作收益:")
-    lines.append(f"  • 当日合作Buff：每次 +2% 营收（上限50%）")
+    lines.append(f"  • 当日合作Buff：每次 +2% 营收（上限{int(COOP_BUFF_CAP * 100)}%）")
     lines.append(f"  • 成功合作双方各 +30 声望")
 
     kb = tag_kb(InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 返回", callback_data=f"company:view:{company_id}")],
     ]), tg_id)
-    await callback.message.edit_text("\n".join(lines), reply_markup=kb)
+    await callback.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode="HTML")
     await callback.answer()

@@ -156,33 +156,37 @@ async def cb_emp_manage(callback: types.CallbackQuery):
         profile = await get_or_create_profile(session, company_id)
 
     hire_cost_per = cfg.employee_salary_base * 10
-    ethics_label = ""
+    ethics_effect = "无"
     if profile.ethics >= 70:
         hire_cost_per = int(hire_cost_per * 0.80)
-        ethics_label = "（道德>=70，招聘-20%）"
+        ethics_effect = "道德≥70，招聘-20%"
     elif profile.ethics < 30:
         hire_cost_per = int(hire_cost_per * 1.50)
-        ethics_label = "（道德<30，招聘+50%）"
+        ethics_effect = "道德<30，招聘+50%"
 
     emp_base, emp_eff = calc_employee_income(company.employee_count, company.daily_revenue)
     emp_total = emp_base + emp_eff
     salary_total = company.employee_count * cfg.employee_salary_base
     net_emp = emp_total - salary_total
+    available_slots = max(0, max_emp - company.employee_count)
+    net_prefix = "+" if net_emp >= 0 else ""
 
     lines = [
-        f"👷 员工管理 — {company.name}",
-        f"{'─' * 24}",
-        f"当前员工：{company.employee_count}/{max_emp}人",
-        f"招聘单价：{fmt_traffic(hire_cost_per)}/人{ethics_label}",
-        f"日薪标准：{fmt_traffic(cfg.employee_salary_base)}/人/日",
-        f"{'─' * 24}",
-        f"💰 人力产出收益：+{fmt_traffic(emp_total)}/日",
-        f"   基础产出：+{fmt_traffic(emp_base)}",
-        f"   效率加成：+{fmt_traffic(emp_eff)}",
-        f"💸 日薪支出：-{fmt_traffic(salary_total)}/日",
-        f"📈 人力净收益：{fmt_traffic(net_emp)}/日",
-        f"{'─' * 24}",
-        "选择操作：",
+        f"👷 员工管理｜{company.name}",
+        "",
+        f"👥 员工：{company.employee_count}/{max_emp}（可招 {available_slots}）",
+        f"💳 招聘单价：{fmt_traffic(hire_cost_per)}/人",
+        f"🧾 日薪标准：{fmt_traffic(cfg.employee_salary_base)}/人/日",
+        f"🧠 道德影响：{ethics_effect}",
+        "",
+        "📊 人力收益（按当前员工）",
+        f"• 产出：+{fmt_traffic(emp_total)}/日",
+        f"  · 基础：+{fmt_traffic(emp_base)}",
+        f"  · 效率：+{fmt_traffic(emp_eff)}",
+        f"• 日薪：-{fmt_traffic(salary_total)}/日",
+        f"• 净收益：{net_prefix}{fmt_traffic(net_emp)}/日",
+        "",
+        "👇 选择操作",
     ]
     kb = employee_manage_kb(company_id, tg_id)
     await _safe_edit_or_send(callback, "\n".join(lines), kb)

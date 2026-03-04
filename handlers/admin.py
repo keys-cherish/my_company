@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import datetime as dt
+
 from aiogram import F, Router, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -31,7 +33,7 @@ from services.company_service import (
 )
 from services.cooperation_service import get_active_cooperations
 from services.user_service import add_points, add_traffic, get_user_by_tg_id
-from utils.formatters import fmt_currency, fmt_reputation_buff, reputation_buff_multiplier
+from utils.formatters import fmt_currency, fmt_duration, reputation_buff_multiplier
 
 router = Router()
 GIVE_MONEY_POINTS_DIVISOR = 1000  # /give_money 赠送金额的换算除数
@@ -50,104 +52,191 @@ async def cb_buff_list(callback: types.CallbackQuery):
             return
 
         from db.models import User
+        from services.cooperation_service import get_cooperation_bonus
+        from services.operations_service import (
+            INSURANCE_LEVELS,
+            LEGAL_WORK_HOURS,
+            bar10,
+            calc_immoral_buff,
+            ethics_rating,
+            get_operation_multipliers,
+            get_or_create_profile,
+            reputation_rating,
+        )
+
+        viewer = await get_user_by_tg_id(session, callback.from_user.id)
+        is_owner = bool(viewer and viewer.id == company.owner_id)
         owner = await session.get(User, company.owner_id)
         rep = owner.reputation if owner else 0
-
-        # 合作Buff（可叠加）
         coops = await get_active_cooperations(session, company_id)
-        from services.cooperation_service import get_cooperation_bonus
-        coop_buff = await get_cooperation_bonus(session, company_id)
+        coop_buff_rate = await get_cooperation_bonus(session, company_id)
+        profile = await get_or_create_profile(session, company_id)
 
-    # 声望Buff（不可叠加，取最高）
+    now_utc = dt.datetime.now(dt.UTC)
+    multipliers = get_operation_multipliers(profile, now_utc)
+    work_info = multipliers["work"]
+    office_info = multipliers["office"]
+    training_info = multipliers["training"]
+    insurance_info = INSURANCE_LEVELS.get(profile.insurance_level, INSURANCE_LEVELS["basic"])
+
     rep_mult = reputation_buff_multiplier(rep)
-    rep_buff_pct = (rep_mult - 1.0) * 100
+    rep_buff_rate = rep_mult - 1.0
 
-    # 广告Buff
     ad_info = await get_active_ad_info(company_id)
-    ad_buff_pct = ad_info["boost_pct"] * 100 if ad_info else 0
-    ad_days = ad_info["remaining_days"] if ad_info else 0
+    ad_buff_rate = float(ad_info["boost_pct"]) if ad_info else 0.0
 
-    # 公司类型Buff
+    from services.shop_service import get_active_buffs, get_income_buff_multiplier
+    shop_buff_mult = await get_income_buff_multiplier(company_id)
+    shop_buff_rate = shop_buff_mult - 1.0
+    active_shop_buffs = await get_active_buffs(company_id)
+
     type_info = get_company_type_info(company.company_type)
-    type_income_buff = type_info.get("income_bonus", 0) * 100 if type_info else 0
-    type_research_buff = type_info.get("research_speed_bonus", 0) * 100 if type_info else 0
-    type_cost_buff = type_info.get("cost_bonus", 0) * 100 if type_info else 0
+    type_income_rate = type_info.get("income_bonus", 0.0) if type_info else 0.0
+    type_research_rate = type_info.get("research_speed_bonus", 0.0) if type_info else 0.0
+    type_cost_rate = type_info.get("cost_bonus", 0.0) if type_info else 0.0
 
-    # 改名惩罚 & 路演翻车 & 商战Debuff (from Redis)
+    culture_income_rate = multipliers["culture_bonus_mult"] - 1.0
+    culture_risk_reduce_rate = (profile.culture / 100) * 0.30
+    immoral_mult = calc_immoral_buff(profile.ethics)
+    immoral_buff_rate = (immoral_mult - 1.0) if immoral_mult > 1.0 else 0.0
+
+    from services.battle_service import get_company_revenue_debuff
+    battle_debuff_rate = await get_company_revenue_debuff(company_id)
+
     from cache.redis_client import get_redis
     _r = await get_redis()
-    _rename_str = await _r.get(f"rename_penalty:{company_id}")
-    rename_pen = float(_rename_str) * 100 if _rename_str else 0
-    _roadshow_str = await _r.get(f"roadshow_penalty:{company_id}")
-    roadshow_pen = float(_roadshow_str) * 100 if _roadshow_str else 0
-    from services.battle_service import get_company_revenue_debuff
-    battle_debuff = await get_company_revenue_debuff(company_id) * 100
-    _totalwar_str = await _r.get(f"totalwar_buff:{company_id}")
-    totalwar_buff = float(_totalwar_str) * 100 if _totalwar_str else 0
+    rename_key = f"rename_penalty:{company_id}"
+    roadshow_key = f"roadshow_penalty:{company_id}"
+    totalwar_key = f"totalwar_buff:{company_id}"
+    battle_key = f"battle:debuff:company:{company_id}"
+
+    _rename_str = await _r.get(rename_key)
+    rename_penalty_rate = float(_rename_str) if _rename_str else 0.0
+    rename_ttl = await _r.ttl(rename_key) if rename_penalty_rate > 0 else -2
+
+    _roadshow_str = await _r.get(roadshow_key)
+    roadshow_penalty_rate = float(_roadshow_str) if _roadshow_str else 0.0
+    roadshow_ttl = await _r.ttl(roadshow_key) if roadshow_penalty_rate > 0 else -2
+
+    _totalwar_str = await _r.get(totalwar_key)
+    totalwar_buff_rate = float(_totalwar_str) if _totalwar_str else 0.0
+    totalwar_ttl = await _r.ttl(totalwar_key) if totalwar_buff_rate > 0 else -2
+
+    battle_ttl = await _r.ttl(battle_key) if battle_debuff_rate > 0 else -2
+
+    effect_rates = [
+        multipliers["income_mult"] - 1.0,                  # 策略倍率（工时/办公/培训/文化）
+        rep_buff_rate,                                      # 声望
+        coop_buff_rate,                                     # 合作
+        ad_buff_rate,                                       # 广告
+        shop_buff_rate,                                     # 商城营收buff
+        type_income_rate,                                   # 公司类型
+        immoral_buff_rate,                                  # 缺德buff
+        totalwar_buff_rate,                                 # 全面商战buff
+        -battle_debuff_rate,                                # 商战减益
+        -rename_penalty_rate,                               # 改名惩罚
+        -roadshow_penalty_rate,                             # 路演翻车
+    ]
+    buff_gain_rate = sum(v for v in effect_rates if v > 0)
+    buff_loss_rate = sum(-v for v in effect_rates if v < 0)
+    buff_net_rate = buff_gain_rate - buff_loss_rate
+    active_effect_count = sum(1 for v in effect_rates if abs(v) >= 0.001)
+
+    def _ttl_suffix(ttl: int) -> str:
+        if ttl and ttl > 0:
+            return f"（剩余 {fmt_duration(ttl)}）"
+        return ""
+
+    train_status = "未生效"
+    train_tail = ""
+    if training_info["active"]:
+        train_status = "生效中"
+        expires_at = training_info.get("expires_at")
+        if expires_at:
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=dt.UTC)
+            remain = max(0, int((expires_at - now_utc).total_seconds()))
+            train_tail = f" | 剩余 {fmt_duration(remain)}"
+
+    if profile.work_hours > LEGAL_WORK_HOURS:
+        reg_daily_delta = (profile.work_hours - LEGAL_WORK_HOURS) * 4
+    else:
+        reg_daily_delta = -(2 + (1 if profile.work_hours <= 6 else 0))
 
     lines = [
         f"📋 {company.name} — Buff一览",
         "─" * 24,
+        f"✨ Buff总览：增益 +{buff_gain_rate*100:.0f}% | 减益 -{buff_loss_rate*100:.0f}% | "
+        f"净影响 {'+' if buff_net_rate >= 0 else '-'}{abs(buff_net_rate)*100:.0f}%（{active_effect_count}项）",
         "",
-        "【声望Buff】(不可叠加，取最高)",
-        f"  当前声望: {rep}",
-        f"  营收加成: +{rep_buff_pct:.1f}%",
+        "【⚙️ 经营策略系】",
+        f"⏰ 工时：{profile.work_hours}h {work_info['label']} | 营收×{work_info['income_mult']:.2f} | "
+        f"成本×{work_info['cost_mult']:.2f} | 道德{work_info['ethics_delta']:+d}/日",
+        f"🏢 办公：{office_info['name']} | 营收×{office_info['income_mult']:.2f} | "
+        f"办公开销 {office_info['employee_cost']}/人/日",
+        f"🏅 培训：{training_info['name']}（{train_status}）| 营收×{training_info['income_mult']:.2f}{train_tail}",
+        f"👑 保险：{insurance_info['name']} | 罚款减免 {int(insurance_info['fine_reduction'] * 100)}% | "
+        f"费率 {insurance_info['cost_rate'] * 100:.1f}%",
+        f"🎭 文化：{profile.culture}/100 [{bar10(profile.culture)}] | "
+        f"营收+{culture_income_rate*100:.1f}% | 风险-{culture_risk_reduce_rate*100:.1f}%",
+        f"😐 道德：{profile.ethics} [{bar10(profile.ethics, -100, 100)}] {ethics_rating(profile.ethics)}",
+        (
+            f"😈 缺德Buff：道德<20触发，当前 +{immoral_buff_rate*100:.1f}%"
+            if immoral_buff_rate > 0
+            else "😈 缺德Buff：未触发（需道德<20）"
+        ),
+        f"🛂 监管：{profile.regulation_pressure}/100 [{bar10(profile.regulation_pressure)}] | 每日变化 {reg_daily_delta:+d}",
+        "   规则：工时>8h 每超1h监管+4；≤8h 监管-2（6h额外-1）",
         "",
-        "【合作Buff】(可叠加，每家+2%)",
-        f"  当前合作数: {len(coops)}",
-        f"  合计营收加成: +{coop_buff*100:.0f}%",
+        "【🌐 外部增益】",
+        f"⭐ 声望：{rep}（评级 {reputation_rating(rep)}） | 营收+{rep_buff_rate*100:.1f}%",
+        f"🤝 合作：{len(coops)}项有效合作 | 营收+{coop_buff_rate*100:.0f}%（当日）",
         "",
-        "【广告Buff】(有时效)",
+        (
+            f"📣 广告：{ad_info.get('name', '广告')} | 营收+{ad_buff_rate*100:.0f}% | "
+            f"剩余 {fmt_duration(max(0, int(ad_info.get('remaining_seconds', 0))))}"
+            if ad_info
+            else "📣 广告：暂无活动广告"
+        ),
+        f"🛍 商城营收Buff：{'+' if shop_buff_rate >= 0 else ''}{shop_buff_rate*100:.0f}%（仅市场分析生效）",
+        (
+            "🧰 商城道具：" + "、".join(f"{b['name']}({b.get('remaining', '生效中')})" for b in active_shop_buffs[:4])
+            + (f" 等{len(active_shop_buffs)}项" if len(active_shop_buffs) > 4 else "")
+            if active_shop_buffs
+            else "🧰 商城道具：暂无生效道具"
+        ),
+        f"🏷 公司类型：{type_info['name'] if type_info else '未知'} | 收入{type_income_rate:+.0%} | "
+        f"研发{type_research_rate:+.0%} | 成本{type_cost_rate:+.0%}",
+        "🏙 地产收益：固定日收入，不参与营收乘数计算",
+        "🔬 AI研发：提升产品基础收入（永久生效）",
+        "",
+        "【⚠️ 当前减益/临时Buff】",
     ]
-    if ad_info:
-        lines.append(f"  活动广告: {ad_info.get('name', '广告')}")
-        lines.append(f"  营收加成: +{ad_buff_pct:.0f}%")
-        lines.append(f"  剩余天数: {ad_days}天")
+
+    temp_lines: list[str] = []
+    if battle_debuff_rate > 0:
+        temp_lines.append(f"⚔️ 商战Debuff：-{battle_debuff_rate*100:.0f}%{_ttl_suffix(battle_ttl)}")
+    if rename_penalty_rate > 0:
+        temp_lines.append(f"🏷️ 改名惩罚：-{rename_penalty_rate*100:.0f}%{_ttl_suffix(rename_ttl)}")
+    if roadshow_penalty_rate > 0:
+        temp_lines.append(f"🎭 路演翻车：-{roadshow_penalty_rate*100:.0f}%{_ttl_suffix(roadshow_ttl)}")
+    if totalwar_buff_rate > 0:
+        temp_lines.append(f"🔥 全面商战Buff：+{totalwar_buff_rate*100:.0f}%{_ttl_suffix(totalwar_ttl)}")
+    if temp_lines:
+        lines.extend(temp_lines)
     else:
-        lines.append("  无活动广告")
+        lines.append("当前无临时减益/Buff")
 
-    lines += [
+    lines.extend([
         "",
-        "【路演Buff】(通过路演随机获得)",
-        "  声望提升 → 影响声望Buff",
-        "  直接积分/荣誉点奖励",
-        "",
-        f"【公司类型Buff】({type_info['name'] if type_info else '未知'})",
-        f"  收入加成: {'+' if type_income_buff >= 0 else ''}{type_income_buff:.0f}%",
-        f"  研发速度: {'+' if type_research_buff >= 0 else ''}{type_research_buff:.0f}%",
-        f"  成本影响: {'+' if type_cost_buff >= 0 else ''}{type_cost_buff:.0f}%",
-        "",
-        "【地产Buff】(永久)",
-        "  地产提供稳定日收入",
-        "  地产收入不受其他Buff影响",
-        "",
-        "【AI研发Buff】(永久)",
-        "  通过AI研发永久提升产品收入",
-        "  提升幅度取决于方案评分(1-100%)",
         "─" * 24,
-        "注: 合作Buff可叠加(上限50%，满级100%)，其他取最高值",
-    ]
-
-    # Debuff section (only show if any active)
-    debuff_lines: list[str] = []
-    if rename_pen > 0:
-        debuff_lines.append(f"  改名惩罚: -{rename_pen:.0f}%（结算后恢复）")
-    if roadshow_pen > 0:
-        debuff_lines.append(f"  路演翻车: -{roadshow_pen:.0f}%（结算后恢复）")
-    if battle_debuff > 0:
-        debuff_lines.append(f"  商战Debuff: -{battle_debuff:.0f}%")
-    if totalwar_buff > 0:
-        debuff_lines.append(f"  全面商战Buff: +{totalwar_buff:.0f}%")
-    if debuff_lines:
-        lines.insert(-2, "")
-        lines.insert(-2, "【当前Debuff/临时Buff】")
-        for dl in debuff_lines:
-            lines.insert(-2, dl)
+        "注：Buff总览口径与主面板一致，不包含行业景气周期。",
+    ])
 
     from keyboards.menus import company_detail_kb
     await callback.message.edit_text(
         "\n".join(lines),
-        reply_markup=company_detail_kb(company_id, True, tg_id=callback.from_user.id),
+        reply_markup=company_detail_kb(company_id, is_owner, tg_id=callback.from_user.id),
     )
     await callback.answer()
 

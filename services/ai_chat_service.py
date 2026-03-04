@@ -149,7 +149,7 @@ COMPANY_KEYWORDS = [
     "老虎机", "slot", "创建公司", "注销", "投资", "股份", "股东",
     "地产", "广告", "道德", "文化", "监管", "景气", "商业帝国",
     "经营", "雇佣", "招聘", "裁员", "解雇", "buff", "加成",
-    "兑换", "储备", "估值", "战力", "研发", "迭代", "品质",
+    "兑换", "估值", "战力", "研发", "迭代", "品质",
     "company", "quest", "battle", "cooperate",
 ]
 
@@ -166,7 +166,7 @@ GAME_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_my_profile",
-            "description": "查看提问者的个人信息：积分、声望、荣誉点、储备积分等",
+            "description": "查看提问者的个人信息：积分、声望、荣誉点等",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -293,7 +293,7 @@ GAME_TOOLS = [
 
 async def _exec_get_my_profile(tg_id: int) -> str:
     from db.engine import async_session
-    from services.user_service import get_user_by_tg_id, get_points, get_quota_mb
+    from services.user_service import get_user_by_tg_id, get_points
     from services.company_service import get_companies_by_owner
 
     async with async_session() as session:
@@ -304,13 +304,11 @@ async def _exec_get_my_profile(tg_id: int) -> str:
         company_names = ", ".join(c.name for c in companies) if companies else "无"
 
     points = await get_points(tg_id)
-    quota = await get_quota_mb(tg_id)
     return (
         f"用户: {user.tg_name}\n"
         f"积分: {user.traffic:,}\n"
         f"声望: {user.reputation}\n"
         f"荣誉点: {points:,}\n"
-        f"储备积分: {quota}\n"
         f"公司: {company_names}"
     )
 

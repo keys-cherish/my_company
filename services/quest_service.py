@@ -9,7 +9,6 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cache.redis_client import get_redis
 from db.models import WeeklyTask
 from services.user_service import add_points, add_traffic
 
@@ -133,9 +132,6 @@ async def claim_quest_reward(
         await add_points(user_id, q["reward_points"], session=session)
     if q["reward_currency"]:
         await add_traffic(session, user_id, q["reward_currency"])
-    if q.get("reward_title"):
-        r = await get_redis()
-        await r.sadd(f"titles:{user_id}", q["reward_title"])
 
     task.rewarded = 1
     await session.flush()
@@ -146,14 +142,5 @@ async def claim_quest_reward(
         reward_parts.append(f"积分+{q['reward_points']}")
     if q["reward_currency"]:
         reward_parts.append(f"+{fmt_traffic(q['reward_currency'])}")
-    if q.get("reward_title"):
-        reward_parts.append(f"称号「{q['reward_title']}」")
 
     return True, f"🎉 领取「{q['name']}」奖励: {' | '.join(reward_parts)}"
-
-
-async def get_user_titles(user_id: int) -> list[str]:
-    """Get all titles a user has earned."""
-    r = await get_redis()
-    titles = await r.smembers(f"titles:{user_id}")
-    return [t.decode() if isinstance(t, bytes) else t for t in titles] if titles else []

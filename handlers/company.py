@@ -16,6 +16,7 @@ from commands import (
     CMD_LIST_COMPANY,
     CMD_MAKEUP,
     CMD_RANK_COMPANY,
+    CMD_RENAME,
 )
 from config import settings as cfg
 from db.engine import async_session
@@ -38,13 +39,12 @@ from handlers.company_helpers import (
     RENAME_COST_RATE,
     RENAME_MIN_COST,
     RENAME_REVENUE_PENALTY,
-    RenameCompanyState,
     _safe_edit_or_send,
     _start_company_type_selection,
     render_company_detail,
     render_company_finance_detail,
 )
-from keyboards.menus import company_detail_kb, company_list_kb, main_menu_kb, tag_kb
+from keyboards.menus import company_detail_kb, company_list_kb, company_manage_kb, main_menu_kb, tag_kb
 from services.company_service import (
     add_funds,
     create_company,
@@ -187,7 +187,7 @@ async def cmd_company(message: types.Message):
         companies = await get_companies_by_owner(session, user.id)
 
     if not companies:
-        await message.answer(
+        await message.reply(
             "你还没有公司。",
             reply_markup=company_list_kb([], tg_id=message.from_user.id),
         )
@@ -196,12 +196,12 @@ async def cmd_company(message: types.Message):
     # 只有一家公司时直接打开详情
     if len(companies) == 1:
         text, kb = await render_company_detail(companies[0].id, tg_id)
-        sent = await message.answer(text, reply_markup=kb)
+        sent = await message.reply(text, reply_markup=kb)
         await mark_panel(message.chat.id, sent.message_id, tg_id)
         return
 
     items = [(c.id, c.name) for c in companies]
-    await message.answer("🏢 你的公司列表:", reply_markup=company_list_kb(items, tg_id=message.from_user.id))
+    await message.reply("🏢 你的公司列表:", reply_markup=company_list_kb(items, tg_id=message.from_user.id))
 
 
 @router.callback_query(F.data == "menu:company")
@@ -262,6 +262,21 @@ async def cb_company_finance(callback: types.CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("company:manage:"))
+async def cb_company_manage(callback: types.CallbackQuery):
+    """公司管理二级菜单。"""
+    company_id = int(callback.data.split(":")[2])
+    tg_id = callback.from_user.id
+    async with async_session() as session:
+        company = await get_company_by_id(session, company_id)
+        if not company:
+            await callback.answer("公司不存在", show_alert=True)
+            return
+    text = f"🔧 {company.name} — 公司管理\n{'─' * 24}\n员工管理、收支明细、Buff查看、公司升级"
+    await _safe_edit_or_send(callback, text, company_manage_kb(company_id, tg_id))
+    await callback.answer()
+
+
 # ---- 创建公司：/company_create 命令或回调按钮 ----
 
 @router.message(Command(CMD_CREATE_COMPANY))
@@ -277,7 +292,7 @@ async def cmd_create_company(message: types.Message, state: FSMContext):
         if companies:
             # 已有公司 → 直接展示
             text, kb = await render_company_detail(companies[0].id, tg_id)
-            sent = await message.answer(
+            sent = await message.reply(
                 "你已经拥有公司，每人只能拥有一家公司\n\n" + text,
                 reply_markup=kb,
             )
@@ -505,24 +520,35 @@ async def cb_do_upgrade(callback: types.CallbackQuery):
         await _refresh_company_view(callback, company_id)
 
 
-# ---- 公司改名（花钱 + 当日营收降低 + 二级确认） ----
+# ---- 公司改名（命令式：/company_rename 新名字） ----
 
 
-@router.callback_query(F.data.startswith("company:rename:"))
-async def cb_rename(callback: types.CallbackQuery, state: FSMContext):
-    company_id = int(callback.data.split(":")[2])
-    tg_id = callback.from_user.id
+@router.message(Command(CMD_RENAME))
+async def cmd_rename(message: types.Message):
+    """改名命令: /company_rename 新公司名字"""
+    tg_id = message.from_user.id
+    raw_args = (message.text or "").split(maxsplit=1)
+    if len(raw_args) < 2 or not raw_args[1].strip():
+        await message.answer("用法: /company_rename 新公司名字\n名称长度 2-16 字，不可与已有公司重名")
+        return
+
+    new_name = raw_args[1].strip()
+    name_err = validate_name(new_name, min_len=2, max_len=16)
+    if name_err:
+        await message.answer(f"❌ {name_err}")
+        return
 
     async with async_session() as session:
-        company = await get_company_by_id(session, company_id)
-        if not company:
-            await callback.answer("公司不存在", show_alert=True)
-            return
         user = await get_user_by_tg_id(session, tg_id)
-        if not user or company.owner_id != user.id:
-            await callback.answer("只有老板才能改名", show_alert=True)
+        if not user:
+            await message.answer("❌ 请先创建账号")
             return
-        rename_cost = max(RENAME_MIN_COST, int(company.total_funds * RENAME_COST_RATE))
+        companies = await get_companies_by_owner(session, user.id)
+        if not companies:
+            await message.answer("❌ 你还没有公司")
+            return
+        company = companies[0]
+        company_id = company.id
 
     # Check cooldown
     r = await get_redis()
@@ -530,103 +556,38 @@ async def cb_rename(callback: types.CallbackQuery, state: FSMContext):
     if cd_ttl and cd_ttl > 0:
         hours = cd_ttl // 3600
         mins = (cd_ttl % 3600) // 60
-        await callback.answer(f"改名冷却中，剩余 {hours}小时{mins}分钟", show_alert=True)
+        await message.answer(f"❌ 改名冷却中，剩余 {hours}小时{mins}分钟")
         return
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ 确认改名", callback_data=f"company:rename_confirm:{company_id}"),
-            InlineKeyboardButton(text="❌ 取消", callback_data=f"company:view:{company_id}"),
-        ],
-    ])
-    kb = tag_kb(kb, callback.from_user.id)
-    await callback.message.edit_text(
-        f"✏️ 公司改名 — {company.name}\n"
-        f"{'─' * 24}\n"
-        f"⚠️ 改名须知:\n"
-        f"  💰 费用: {fmt_traffic(rename_cost)}\n"
-        f"  📉 当日营收降低 {int(RENAME_REVENUE_PENALTY * 100)}%\n"
-        f"  （次日结算后自动恢复）\n"
-        f"  ⏰ 改名后冷却 {RENAME_COOLDOWN // 3600} 小时\n\n"
-        f"确认要改名吗？",
-        reply_markup=kb,
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("company:rename_confirm:"))
-async def cb_rename_confirm(callback: types.CallbackQuery, state: FSMContext):
-    company_id = int(callback.data.split(":")[2])
-    tg_id = callback.from_user.id
-
-    async with async_session() as session:
-        company = await get_company_by_id(session, company_id)
-        if not company:
-            await callback.answer("公司不存在", show_alert=True)
-            return
-        user = await get_user_by_tg_id(session, tg_id)
-        if not user or company.owner_id != user.id:
-            await callback.answer("只有老板才能改名", show_alert=True)
-            return
-
-    await state.set_state(RenameCompanyState.waiting_new_name)
-    await state.update_data(company_id=company_id)
-    await callback.message.edit_text(f"当前名称: {company.name}\n请输入新公司名称 (2-16字):")
-    await callback.answer()
-
-
-@router.message(RenameCompanyState.waiting_new_name)
-async def on_new_name(message: types.Message, state: FSMContext):
-    new_name = message.text.strip()
-    name_err = validate_name(new_name, min_len=2, max_len=16)
-    if name_err:
-        await message.answer(f"{name_err}，请重新输入:")
-        return
-
-    data = await state.get_data()
-    company_id = data["company_id"]
 
     async with async_session() as session:
         async with session.begin():
             exists = await session.execute(select(Company).where(Company.name == new_name))
             if exists.scalar_one_or_none():
-                await message.answer("名称已被使用，请换一个:")
+                await message.answer("❌ 该名称已被使用，请换一个")
                 return
             company = await session.get(Company, company_id)
             if not company:
-                await message.answer("公司不存在")
-                await state.clear()
+                await message.answer("❌ 公司不存在")
                 return
 
-            # Calculate and deduct rename cost
             rename_cost = max(RENAME_MIN_COST, int(company.total_funds * RENAME_COST_RATE))
             ok = await add_funds(session, company_id, -rename_cost)
             if not ok:
-                await message.answer(f"❌ 公司积分不足，改名需要 {fmt_traffic(rename_cost)}")
-                await state.clear()
+                await message.answer(f"❌ 公司资金不足，改名需要 {fmt_traffic(rename_cost)}")
                 return
 
             old_name = company.name
             company.name = new_name
 
-            # Apply revenue penalty via Redis (settlement will check this)
             r = await get_redis()
             await r.set(f"rename_penalty:{company_id}", str(RENAME_REVENUE_PENALTY), ex=86400)
-            # Set rename cooldown
             await r.set(f"rename_cd:{company_id}", "1", ex=RENAME_COOLDOWN)
 
     await message.answer(
-        f"✅ 公司改名成功! {old_name} → {new_name}\n"
+        f"✅ 改名成功! {old_name} → {new_name}\n"
         f"💰 花费: {fmt_traffic(rename_cost)}\n"
-        f"📉 当日营收将降低 {int(RENAME_REVENUE_PENALTY * 100)}%，次日恢复"
+        f"📉 当日营收降低 {int(RENAME_REVENUE_PENALTY * 100)}%，次日恢复"
     )
-    await state.clear()
-    await message.answer("返回主菜单:", reply_markup=main_menu_kb(tg_id=message.from_user.id))
-
-    # 改名后刷新公司面板
-    text, kb = await render_company_detail(company_id, message.from_user.id)
-    sent = await message.answer(text, reply_markup=kb)
-    await mark_panel(message.chat.id, sent.message_id, message.from_user.id)
 
 
 @router.message(Command(CMD_DISSOLVE))

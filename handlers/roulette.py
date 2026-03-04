@@ -21,6 +21,7 @@ from services.roulette_service import (
     get_game_state,
     get_player_room,
     join_room,
+    leave_room,
     player_shoot,
     player_use_item,
     render_game_panel,
@@ -53,45 +54,67 @@ def _bet_kb(company_id: int, tg_id: int) -> InlineKeyboardMarkup:
     return tag_kb(InlineKeyboardMarkup(inline_keyboard=rows), tg_id)
 
 
-def _waiting_kb(room_id: str, creator_tg_id: int, tg_id: int) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    if tg_id == creator_tg_id:
-        rows.append(
-            [
-                InlineKeyboardButton(text="▶️ 开始", callback_data=f"roulette:begin:{room_id}"),
-                InlineKeyboardButton(text="😈 单挑魔鬼", callback_data=f"roulette:solo:{room_id}"),
-            ]
-        )
-        rows.append([InlineKeyboardButton(text="❌ 关闭房间", callback_data=f"roulette:cancel:{room_id}")])
-    else:
-        rows.append([InlineKeyboardButton(text="✅ 加入", callback_data=f"roulette:join:{room_id}")])
-    return tag_kb(InlineKeyboardMarkup(inline_keyboard=rows), tg_id)
+def _owner_cb(callback_data: str, owner_tg_id: int) -> str:
+    """Attach owner suffix for panel_auth middleware."""
+    return f"{callback_data}|{owner_tg_id}"
+
+
+def _waiting_kb(room_id: str, creator_tg_id: int) -> InlineKeyboardMarkup:
+    """Public waiting keyboard: anyone can join/refresh, only creator can start/close."""
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="✅ 加入", callback_data=f"roulette:join:{room_id}")],
+        [
+            InlineKeyboardButton(
+                text="▶️ 开始",
+                callback_data=_owner_cb(f"roulette:begin:{room_id}", creator_tg_id),
+            ),
+            InlineKeyboardButton(
+                text="😈 单挑魔鬼",
+                callback_data=_owner_cb(f"roulette:solo:{room_id}", creator_tg_id),
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🚪 退出房间",
+                callback_data=f"roulette:leave:{room_id}",
+            ),
+            InlineKeyboardButton(
+                text="❌ 关闭房间",
+                callback_data=_owner_cb(f"roulette:cancel:{room_id}", creator_tg_id),
+            ),
+        ],
+        [InlineKeyboardButton(text="🔄 刷新", callback_data=f"roulette:refresh:{room_id}")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _game_kb(state, viewer_tg_id: int) -> InlineKeyboardMarkup:
+    """Shared in-chat game keyboard (not owner-tagged) for multiplayer flow."""
     rows: list[list[InlineKeyboardButton]] = []
     current = _current_turn_tg_id(state)
 
-    if state.phase != "playing" or current != viewer_tg_id:
-        rows.append(
-            [InlineKeyboardButton(text="🔄 刷新", callback_data=f"roulette:refresh:{state.room_id}")]
-        )
-        if state.phase == "finished":
-            return InlineKeyboardMarkup(inline_keyboard=rows)
-        return tag_kb(InlineKeyboardMarkup(inline_keyboard=rows), viewer_tg_id)
+    if state.phase != "playing":
+        rows.append([InlineKeyboardButton(text="🔄 刷新", callback_data=f"roulette:refresh:{state.room_id}")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
 
-    player = _get_player(state, viewer_tg_id)
+    if current == DEVIL_TG_ID:
+        rows.append([InlineKeyboardButton(text="🔄 刷新", callback_data=f"roulette:refresh:{state.room_id}")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    # Always show operation controls for the current turn player (shared panel mode).
+    player = _get_player(state, current)
     if not player or not player["alive"]:
+        rows.append([InlineKeyboardButton(text="🔄 刷新", callback_data=f"roulette:refresh:{state.room_id}")])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     # Shoot buttons
     shoot_row: list[InlineKeyboardButton] = []
     for p in _alive_players(state):
-        if p["tg_id"] == viewer_tg_id:
+        if p["tg_id"] == current:
             shoot_row.append(
                 InlineKeyboardButton(
                     text="🎯自己",
-                    callback_data=f"roulette:shoot:{state.room_id}:{viewer_tg_id}",
+                    callback_data=f"roulette:shoot:{state.room_id}:{current}",
                 )
             )
         else:
@@ -125,7 +148,8 @@ def _game_kb(state, viewer_tg_id: int) -> InlineKeyboardMarkup:
         rows.append(item_row)
 
     rows.append([InlineKeyboardButton(text="🏳️ 放弃(-50%)", callback_data=f"roulette:cancel:{state.room_id}")])
-    return tag_kb(InlineKeyboardMarkup(inline_keyboard=rows), viewer_tg_id)
+    rows.append([InlineKeyboardButton(text="🔄 刷新", callback_data=f"roulette:refresh:{state.room_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @router.callback_query(F.data.startswith("roulette:start:"))
@@ -206,7 +230,7 @@ async def cb_roulette_create(callback: types.CallbackQuery):
         return
 
     text = render_game_panel(state, tg_id)
-    kb = _waiting_kb(room_id, tg_id, tg_id)
+    kb = _waiting_kb(room_id, tg_id)
     try:
         await callback.message.edit_text(text, reply_markup=kb)
     except Exception:
@@ -264,7 +288,7 @@ async def cb_roulette_join(callback: types.CallbackQuery):
         return
 
     text = render_game_panel(state, tg_id)
-    kb = _waiting_kb(room_id, state.creator_tg_id, tg_id)
+    kb = _waiting_kb(room_id, state.creator_tg_id)
     try:
         await callback.message.edit_text(text, reply_markup=kb)
     except Exception:
@@ -326,12 +350,29 @@ async def cb_roulette_shoot(callback: types.CallbackQuery):
         return
 
     text = render_game_panel(state, tg_id)
+    if state and state.phase == "finished" and msg:
+        text += f"\n\n{msg}"
     kb = _game_kb(state, tg_id)
     try:
         await callback.message.edit_text(text, reply_markup=kb)
     except Exception:
         sent = await callback.message.answer(text, reply_markup=kb)
         await mark_panel(sent.chat.id, sent.message_id, tg_id)
+
+    # Notify next player in group chat
+    if state and state.phase == "playing":
+        next_tid = _current_turn_tg_id(state)
+        next_p = _get_player(state, next_tid)
+        if next_p and not next_p.get("is_devil") and next_tid != tg_id:
+            try:
+                shooter_name = callback.from_user.first_name or "?"
+                note = await callback.message.answer(
+                    f"📢 {shooter_name} 已操作，轮到你了\n"
+                    f"<a href='tg://user?id={next_tid}'>{next_p['name']}</a> 请点击上方面板操作",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
     await callback.answer()
 
 
@@ -348,6 +389,8 @@ async def cb_roulette_use_item(callback: types.CallbackQuery):
         return
 
     text = render_game_panel(state, tg_id)
+    if state and state.phase == "finished" and msg:
+        text += f"\n\n{msg}"
     kb = _game_kb(state, tg_id)
     try:
         await callback.message.edit_text(text, reply_markup=kb)
@@ -361,6 +404,42 @@ async def cb_roulette_use_item(callback: types.CallbackQuery):
         await callback.answer(f"🔍 当前子弹：{shell_text}", show_alert=True)
     else:
         await callback.answer()
+
+    # Notify next player if turn changed (item didn't end the game)
+    if state and state.phase == "playing":
+        next_tid = _current_turn_tg_id(state)
+        next_p = _get_player(state, next_tid)
+        if next_p and not next_p.get("is_devil") and next_tid != tg_id:
+            try:
+                user_name = callback.from_user.first_name or "?"
+                await callback.message.answer(
+                    f"📢 {user_name} 使用了道具，轮到你了\n"
+                    f"<a href='tg://user?id={next_tid}'>{next_p['name']}</a> 请点击上方面板操作",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
+
+@router.callback_query(F.data.startswith("roulette:leave:"))
+async def cb_roulette_leave(callback: types.CallbackQuery):
+    room_id = callback.data.split(":")[2]
+    tg_id = callback.from_user.id
+
+    ok, msg, state = await leave_room(room_id=room_id, tg_id=tg_id)
+    if not ok:
+        await callback.answer(msg, show_alert=True)
+        return
+
+    # Refresh panel for remaining players
+    if state:
+        text = render_game_panel(state, state.creator_tg_id)
+        kb = _waiting_kb(room_id, state.creator_tg_id)
+        try:
+            await callback.message.edit_text(text, reply_markup=kb)
+        except Exception:
+            pass
+    await callback.answer(msg)
 
 
 @router.callback_query(F.data.startswith("roulette:cancel:"))
@@ -387,7 +466,7 @@ async def cb_roulette_refresh(callback: types.CallbackQuery):
         return
 
     text = render_game_panel(state, tg_id)
-    kb = _waiting_kb(room_id, state.creator_tg_id, tg_id) if state.phase == "waiting" else _game_kb(state, tg_id)
+    kb = _waiting_kb(room_id, state.creator_tg_id) if state.phase == "waiting" else _game_kb(state, tg_id)
 
     try:
         await callback.message.edit_text(text, reply_markup=kb)

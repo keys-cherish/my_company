@@ -34,16 +34,15 @@ def main_menu_kb(tg_id: int | None = None) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📊 个人面板", callback_data="menu:profile"),
         ],
         [
-            InlineKeyboardButton(text="� 每日打卡", callback_data="menu:checkin"),
+            InlineKeyboardButton(text="✅ 每日打卡", callback_data="menu:checkin"),
             InlineKeyboardButton(text="🎰 老虎机", callback_data="slot:spin"),
         ],
         [
-            InlineKeyboardButton(text="�📈 排行榜", callback_data="menu:leaderboard"),
+            InlineKeyboardButton(text="📈 排行榜", callback_data="menu:leaderboard"),
             InlineKeyboardButton(text="🎯 周任务", callback_data="menu:quest"),
         ],
         [
-            InlineKeyboardButton(text="🏦 交易所", callback_data="menu:exchange"),
-            InlineKeyboardButton(text="💸 分红记录", callback_data="menu:dividend"),
+            InlineKeyboardButton(text="🏦 交易所", callback_data="menu:exchange:main"),
         ],
     ])
     return tag_kb(kb, tg_id)
@@ -66,51 +65,58 @@ def company_list_kb(companies: list[tuple[int, str]], tg_id: int | None = None) 
 def company_detail_kb(company_id: int, is_owner: bool, tg_id: int | None = None) -> InlineKeyboardMarkup:
     buttons = [
         [
-            InlineKeyboardButton(text="股东", callback_data=f"shareholder:list:{company_id}"),
-            InlineKeyboardButton(text="产品", callback_data=f"product:list:{company_id}"),
+            InlineKeyboardButton(text="👥 股东", callback_data=f"shareholder:list:{company_id}"),
+            InlineKeyboardButton(text="📦 产品", callback_data=f"product:list:{company_id}"),
         ],
         [
-            InlineKeyboardButton(text="科研", callback_data=f"research:list:{company_id}"),
-            InlineKeyboardButton(text="地产", callback_data=f"realestate:list:{company_id}"),
+            InlineKeyboardButton(text="🔬 科研", callback_data=f"research:list:{company_id}"),
+            InlineKeyboardButton(text="🤖 AI研发", callback_data=f"aird:start:{company_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="🏙️ 地产", callback_data=f"realestate:list:{company_id}"),
         ],
     ]
     if is_owner:
         buttons.extend([
             [
-                InlineKeyboardButton(text="经营策略", callback_data=f"ops:menu:{company_id}"),
-                InlineKeyboardButton(text="员工管理", callback_data=f"company:emp_manage:{company_id}"),
+                InlineKeyboardButton(text="⚙️ 经营策略", callback_data=f"ops:menu:{company_id}"),
+                InlineKeyboardButton(text="📣 推广", callback_data=f"promo:menu:{company_id}"),
             ],
             [
-                InlineKeyboardButton(text="路演", callback_data=f"roadshow:do:{company_id}"),
-                InlineKeyboardButton(text="合作状态", callback_data=f"cooperation:init:{company_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="收支明细", callback_data=f"company:finance:{company_id}"),
-                InlineKeyboardButton(text="分红记录", callback_data=f"dividend:history:{company_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="广告", callback_data=f"ad:menu:{company_id}"),
-                InlineKeyboardButton(text="AI研发", callback_data=f"aird:start:{company_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="改名", callback_data=f"company:rename:{company_id}"),
-                InlineKeyboardButton(text="Buff一览", callback_data=f"buff:list:{company_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="交易所", callback_data="menu:exchange"),
-                InlineKeyboardButton(text="周任务", callback_data="menu:quest"),
+                InlineKeyboardButton(text="🤝 合作状态", callback_data=f"cooperation:init:{company_id}"),
+                InlineKeyboardButton(text="🏦 交易所", callback_data=f"menu:exchange:company:{company_id}"),
             ],
             [
                 InlineKeyboardButton(text="😈 恶魔轮盘赌", callback_data=f"roulette:start:{company_id}"),
                 InlineKeyboardButton(text="🎯 悬赏令", callback_data=f"bounty:menu:{company_id}"),
             ],
-            [InlineKeyboardButton(text="升级公司", callback_data=f"company:upgrade:{company_id}")],
+            [
+                InlineKeyboardButton(text="🎯 周任务", callback_data="menu:quest"),
+                InlineKeyboardButton(text="🔧 公司管理", callback_data=f"company:manage:{company_id}"),
+            ],
         ])
     else:
         buttons.append([
-            InlineKeyboardButton(text="注资", callback_data=f"shareholder:invest:{company_id}"),
+            InlineKeyboardButton(text="💵 注资", callback_data=f"shareholder:invest:{company_id}"),
         ])
+    buttons.append([InlineKeyboardButton(text="🔙 返回主菜单", callback_data="menu:main")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    return tag_kb(kb, tg_id)
+
+
+def company_manage_kb(company_id: int, tg_id: int | None = None) -> InlineKeyboardMarkup:
+    """二级菜单：公司管理（低频操作）。"""
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="👷 员工管理", callback_data=f"company:emp_manage:{company_id}"),
+            InlineKeyboardButton(text="📒 收支明细", callback_data=f"company:finance:{company_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="✨ Buff一览", callback_data=f"buff:list:{company_id}"),
+            InlineKeyboardButton(text="🚀 升级公司", callback_data=f"company:upgrade:{company_id}"),
+        ],
+        [InlineKeyboardButton(text="🔙 返回公司", callback_data=f"company:view:{company_id}")],
+    ])
     return tag_kb(kb, tg_id)
 
 
@@ -119,14 +125,14 @@ def employee_manage_kb(company_id: int, tg_id: int | None = None) -> InlineKeybo
     """Employee management sub-panel: hire / fire buttons."""
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="👷+1", callback_data=f"company:hire:{company_id}:1"),
-            InlineKeyboardButton(text="👷+5", callback_data=f"company:hire:{company_id}:5"),
-            InlineKeyboardButton(text="👷+Max", callback_data=f"company:hire:{company_id}:max"),
+            InlineKeyboardButton(text="➕ 招1", callback_data=f"company:hire:{company_id}:1"),
+            InlineKeyboardButton(text="➕ 招5", callback_data=f"company:hire:{company_id}:5"),
+            InlineKeyboardButton(text="➕ 招满", callback_data=f"company:hire:{company_id}:max"),
         ],
         [
-            InlineKeyboardButton(text="裁员-1", callback_data=f"company:fire:{company_id}:1"),
-            InlineKeyboardButton(text="裁员-5", callback_data=f"company:fire:{company_id}:5"),
-            InlineKeyboardButton(text="裁员-Max", callback_data=f"company:fire:{company_id}:max"),
+            InlineKeyboardButton(text="➖ 裁1", callback_data=f"company:fire:{company_id}:1"),
+            InlineKeyboardButton(text="➖ 裁5", callback_data=f"company:fire:{company_id}:5"),
+            InlineKeyboardButton(text="➖ 裁满", callback_data=f"company:fire:{company_id}:max"),
         ],
         [InlineKeyboardButton(text="🔙 返回公司", callback_data=f"company:view:{company_id}")],
     ])
@@ -138,11 +144,11 @@ def employee_manage_kb(company_id: int, tg_id: int | None = None) -> InlineKeybo
 def invest_kb(company_id: int, tg_id: int | None = None) -> InlineKeyboardMarkup:
     amounts = [500, 1000, 2000, 5000]
     buttons = [
-        [InlineKeyboardButton(text=f"注资 {a:,} 积分", callback_data=f"shareholder:doinvest:{company_id}:{a}")]
+        [InlineKeyboardButton(text=f"💰 注资 {a:,} 积分", callback_data=f"shareholder:doinvest:{company_id}:{a}")]
         for a in amounts
     ]
     buttons.append([InlineKeyboardButton(text="✍️ 自定义积分（文本）", callback_data=f"shareholder:input:{company_id}")])
-    buttons.append([InlineKeyboardButton(text="🔙 返回", callback_data=f"company:view:{company_id}")])
+    buttons.append([InlineKeyboardButton(text="🔙 返回股东", callback_data=f"shareholder:list:{company_id}")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     return tag_kb(kb, tg_id)
 
@@ -226,7 +232,7 @@ def exchange_kb(rate_per_mb: int | None = None, tg_id: int | None = None) -> Inl
     safe_rate = max(1, rate_per_mb or 120)
     buttons = [
         [InlineKeyboardButton(
-            text=f"花费 {amount:,} 积分 (~{max(1, amount // safe_rate)}储备积分)",
+            text=f"花费 {amount:,} 积分 (~{max(1, amount // safe_rate)}MB)",
             callback_data=f"exchange:{amount}",
         )]
         for amount in spend_amounts

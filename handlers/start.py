@@ -31,8 +31,8 @@ from config import settings
 from db.engine import async_session
 from keyboards.menus import main_menu_kb, tag_kb
 from services.company_service import get_companies_by_owner
-from services.user_service import get_or_create_user, get_points, get_quota_mb
-from utils.formatters import fmt_traffic, fmt_quota, compact_number
+from services.user_service import get_or_create_user, get_points
+from utils.formatters import fmt_traffic, compact_number
 from utils.panel_owner import mark_panel
 
 router = Router()
@@ -101,17 +101,18 @@ async def cmd_start(message: types.Message):
             reputation = user.reputation
 
     if created:
-        await message.answer(
+        sent = await message.reply(
             f"欢迎加入 商业帝国!\n"
             f"已发放初始积分: {fmt_traffic(settings.initial_traffic)}\n\n"
             f"使用下方菜单开始游戏:",
             reply_markup=main_menu_kb(tg_id=tg_id),
         )
     else:
-        await message.answer(
+        sent = await message.reply(
             f"🏢 商业帝国 — 主菜单",
             reply_markup=main_menu_kb(tg_id=tg_id),
         )
+    await mark_panel(sent.chat.id, sent.message_id, tg_id)
 
 
 @router.message(Command(CMD_HELP))
@@ -143,13 +144,8 @@ async def cb_menu_profile(callback: types.CallbackQuery):
         reputation = user.reputation
 
     points = await get_points(tg_id)
-    quota = await get_quota_mb(tg_id)
 
     company_names = ", ".join(c.name for c in companies) if companies else "无"
-
-    from services.quest_service import get_user_titles
-    titles = await get_user_titles(user.id)
-    title_str = ", ".join(titles) if titles else "无"
 
     text = (
         f"📊 个人面板 — {callback.from_user.full_name}\n"
@@ -157,8 +153,6 @@ async def cb_menu_profile(callback: types.CallbackQuery):
         f"💰 积分: {fmt_traffic(traffic)}\n"
         f"⭐ 声望: {reputation}\n"
         f"🎁 荣誉点: {points:,}\n"
-        f"📦 储备积分: {fmt_quota(quota)}\n"
-        f"🏅 称号: {title_str}\n"
         f"🏢 公司: {company_names}\n"
     )
 
@@ -212,7 +206,7 @@ async def _show_leaderboard(callback: types.CallbackQuery, board_type: str):
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         cat_buttons,
-        [InlineKeyboardButton(text="🔙 返回", callback_data="menu:company")],
+        [InlineKeyboardButton(text="🔙 返回", callback_data="menu:main")],
     ])
     kb = tag_kb(kb, callback.from_user.id)
     try:
