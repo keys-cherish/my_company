@@ -64,7 +64,7 @@ from utils.validators import validate_name
 router = Router()
 
 
-# ---- /company_list 列出所有公司 ----
+# ---- /cp_list 列出所有公司 ----
 
 @router.message(Command(CMD_LIST_COMPANY))
 async def cmd_list_company(message: types.Message):
@@ -92,7 +92,7 @@ async def cmd_list_company(message: types.Message):
     await message.answer("\n".join(lines))
 
 
-# ---- /company_rank 综合实力排行 ----
+# ---- /cp_rank 综合实力排行 ----
 
 @router.message(Command(CMD_RANK_COMPANY))
 async def cmd_rank_company(message: types.Message):
@@ -148,7 +148,7 @@ async def cmd_rank_company(message: types.Message):
     await message.answer("\n".join(lines))
 
 
-# ---- /company_makeup 数据清理命令 ----
+# ---- /cp_makeup 数据清理命令 ----
 
 
 @router.message(Command(CMD_MAKEUP))
@@ -175,14 +175,14 @@ async def cmd_makeup(message: types.Message):
         await message.answer(f"❌ 数据清理出错: {e}")
 
 
-# /company
+# /cp
 @router.message(Command(CMD_COMPANY))
 async def cmd_company(message: types.Message):
     tg_id = message.from_user.id
     async with async_session() as session:
         user = await get_user_by_tg_id(session, tg_id)
         if not user:
-            await message.answer("请先使用 /company_start 注册")
+            await message.answer("请先使用 /cp_start 注册")
             return
         companies = await get_companies_by_owner(session, user.id)
 
@@ -210,7 +210,7 @@ async def cb_menu_company(callback: types.CallbackQuery):
     async with async_session() as session:
         user = await get_user_by_tg_id(session, tg_id)
         if not user:
-            await callback.answer("请先 /company_create 创建公司", show_alert=True)
+            await callback.answer("请先 /cp_create 创建公司", show_alert=True)
             return
         companies = await get_companies_by_owner(session, user.id)
 
@@ -233,7 +233,7 @@ async def cb_menu_company_list(callback: types.CallbackQuery):
     async with async_session() as session:
         user = await get_user_by_tg_id(session, tg_id)
         if not user:
-            await callback.answer("请先 /company_create 创建公司", show_alert=True)
+            await callback.answer("请先 /cp_create 创建公司", show_alert=True)
             return
         companies = await get_companies_by_owner(session, user.id)
 
@@ -277,11 +277,11 @@ async def cb_company_manage(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# ---- 创建公司：/company_create 命令或回调按钮 ----
+# ---- 创建公司：/cp_create 命令或回调按钮 ----
 
 @router.message(Command(CMD_CREATE_COMPANY))
 async def cmd_create_company(message: types.Message, state: FSMContext):
-    """创建公司命令入口。自动注册用户，无需先 /company_start。"""
+    """创建公司命令入口。自动注册用户，无需先 /cp_start。"""
     tg_id = message.from_user.id
     tg_name = message.from_user.full_name or str(tg_id)
 
@@ -360,7 +360,7 @@ async def on_company_name(message: types.Message, state: FSMContext):
         async with session.begin():
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
-                await message.answer("请先 /company_create 创建公司")
+                await message.answer("请先 /cp_create 创建公司")
                 await state.clear()
                 return
             company, msg = await create_company(session, user, name, company_type)
@@ -520,16 +520,16 @@ async def cb_do_upgrade(callback: types.CallbackQuery):
         await _refresh_company_view(callback, company_id)
 
 
-# ---- 公司改名（命令式：/company_rename 新名字） ----
+# ---- 公司改名（命令式：/cp_rename 新名字） ----
 
 
 @router.message(Command(CMD_RENAME))
 async def cmd_rename(message: types.Message):
-    """改名命令: /company_rename 新公司名字"""
+    """改名命令: /cp_rename 新公司名字"""
     tg_id = message.from_user.id
     raw_args = (message.text or "").split(maxsplit=1)
     if len(raw_args) < 2 or not raw_args[1].strip():
-        await message.answer("用法: /company_rename 新公司名字\n名称长度 2-16 字，不可与已有公司重名")
+        await message.answer("用法: /cp_rename 新公司名字\n名称长度 2-16 字，不可与已有公司重名")
         return
 
     new_name = raw_args[1].strip()
@@ -600,7 +600,7 @@ async def cmd_dissolve(message: types.Message):
         async with async_session() as session:
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
-                await message.answer("请先 /company_create 创建公司")
+                await message.answer("请先 /cp_create 创建公司")
                 return
             companies = await get_companies_by_owner(session, user.id)
             if not companies:
@@ -610,7 +610,7 @@ async def cmd_dissolve(message: types.Message):
         await message.answer(
             f"⚠️ 确认要注销以下公司吗？\n{names}\n\n"
             "⚠️ 注销后所有公司数据和个人积分将被清零！\n"
-            "确认请发送: /company_dissolve confirm"
+            "确认请发送: /cp_dissolve confirm"
         )
         return
 
@@ -618,7 +618,7 @@ async def cmd_dissolve(message: types.Message):
         async with session.begin():
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
-                await message.answer("请先 /company_create 创建公司")
+                await message.answer("请先 /cp_create 创建公司")
                 return
             companies = await get_companies_by_owner(session, user.id)
             if not companies:
@@ -650,5 +650,5 @@ async def cmd_dissolve(message: types.Message):
     await message.answer(
         f"🗑 公司已注销: {', '.join(f'「{n}」' for n in names)}\n"
         f"所有积分和声望已清零\n"
-        f"使用 /company_create 重新开始"
+        f"使用 /cp_create 重新开始"
     )

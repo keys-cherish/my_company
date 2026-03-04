@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
+import uuid
 
 from aiogram import F, Router, types
 from aiogram.filters import Command
@@ -11,10 +13,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from cache.redis_client import RedisLock, get_redis
 from commands import CMD_CANCEL, CMD_INVEST
+from db.models import User
 from db.engine import async_session
 from keyboards.menus import invest_kb, shareholder_list_kb
-from services.company_service import get_companies_by_owner
+from services.company_service import get_companies_by_owner, get_company_by_id
 from services.shareholder_service import get_shareholders, invest
 from utils.panel_owner import mark_panel
 from services.user_service import get_user_by_tg_id
@@ -24,6 +28,7 @@ router = Router()
 
 # ── 常量 ──────────────────────────────────────────────
 INVEST_INPUT_TIMEOUT_SECONDS = 5 * 60  # 自定义注资输入超时（5分钟）
+INVEST_APPROVAL_TTL_SECONDS = 3 * 60 * 60  # 注资审批有效期（3小时）
 INVEST_KEYWORD = chr(0x6295) + chr(0x8D44)  # "投资"
 CN_COMMA = chr(0xFF0C)  # 中文逗号，用于金额解析
 INVEST_SHORTCUT_RE = re.compile(rf"^\s*{INVEST_KEYWORD}\s*([0-9][0-9_,{CN_COMMA}]*)\s*$")
@@ -47,6 +52,77 @@ def _parse_amount(amount_text: str) -> int | None:
     return amount
 
 
+def _approval_key(token: str) -> str:
+    return f"invest_approval:{token}"
+
+
+def _approval_kb(token: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ 同意注资", callback_data=f"shareholder:invreq:approve:{token}"),
+                InlineKeyboardButton(text="❌ 拒绝", callback_data=f"shareholder:invreq:reject:{token}"),
+            ],
+        ]
+    )
+
+
+async def _notify_investor(bot, investor_tg_id: int, text: str):
+    try:
+        await bot.send_message(investor_tg_id, text)
+    except Exception:
+        pass
+
+
+async def _create_invest_approval_request(
+    bot,
+    *,
+    investor_tg_id: int,
+    investor_name: str,
+    target_tg_id: int,
+    target_company_id: int,
+    target_company_name: str,
+    amount: int,
+) -> tuple[bool, str]:
+    token = uuid.uuid4().hex
+    payload = {
+        "investor_tg_id": investor_tg_id,
+        "target_tg_id": target_tg_id,
+        "target_company_id": target_company_id,
+        "target_company_name": target_company_name,
+        "amount": amount,
+        "created_at": int(time.time()),
+    }
+    r = await get_redis()
+    await r.setex(_approval_key(token), INVEST_APPROVAL_TTL_SECONDS, json.dumps(payload, ensure_ascii=False))
+
+    try:
+        await bot.send_message(
+            target_tg_id,
+            (
+                "💼 收到一条注资请求\n"
+                f"投资人：{investor_name}\n"
+                f"目标公司：{target_company_name}\n"
+                f"注资金额：{fmt_traffic(amount)}\n\n"
+                f"请在 {INVEST_APPROVAL_TTL_SECONDS // 3600} 小时内处理："
+            ),
+            reply_markup=_approval_kb(token),
+        )
+    except Exception:
+        await r.delete(_approval_key(token))
+        return False, (
+            "❌ 无法向对方发送私聊审批通知。\n"
+            "请让对方先私聊机器人发送 /cp_start 后再重试。"
+        )
+
+    return True, (
+        f"📨 注资请求已发送给对方私聊，等待同意。\n"
+        f"目标公司：{target_company_name}\n"
+        f"金额：{fmt_traffic(amount)}\n"
+        f"有效期：3小时"
+    )
+
+
 async def _handle_reply_invest(message: types.Message, amount: int):
     """通过回复消息对目标用户的公司进行注资。"""
     if not message.reply_to_message or not message.reply_to_message.from_user:
@@ -67,12 +143,12 @@ async def _handle_reply_invest(message: types.Message, amount: int):
         async with session.begin():
             investor_user = await get_user_by_tg_id(session, investor_tg_id)
             if not investor_user:
-                await message.answer("请先 /company_start 注册账号。")
+                await message.answer("请先 /cp_start 注册账号。")
                 return
 
             investor_companies = await get_companies_by_owner(session, investor_user.id)
             if not investor_companies:
-                await message.answer("你还没有公司，无法注资。请先 /company_create 创建公司。")
+                await message.answer("你还没有公司，无法注资。请先 /cp_create 创建公司。")
                 return
             investor_company = investor_companies[0]
             investor_quota = int(investor_company.total_funds)
@@ -93,22 +169,167 @@ async def _handle_reply_invest(message: types.Message, amount: int):
                 return
 
             target_company = target_companies[0]
-            ok, invest_msg = await invest(session, investor_user.id, target_company.id, amount)
+            ok, text = await _create_invest_approval_request(
+                message.bot,
+                investor_tg_id=investor_tg_id,
+                investor_name=message.from_user.full_name or str(investor_tg_id),
+                target_tg_id=target_user_tg.id,
+                target_company_id=target_company.id,
+                target_company_name=target_company.name,
+                amount=amount,
+            )
+
+    await message.answer(text)
+    if not ok:
+        return
+
+
+async def _queue_approval_or_invest_direct(
+    *,
+    bot,
+    investor_tg_id: int,
+    investor_user_id: int,
+    investor_name: str,
+    target_company_id: int,
+    amount: int,
+) -> tuple[bool, str, bool]:
+    """Return (ok, msg, pending_approval)."""
+    async with async_session() as session:
+        async with session.begin():
+            company = await get_company_by_id(session, target_company_id)
+            if not company:
+                return False, "目标公司不存在。", False
+
+            owner = await session.get(User, company.owner_id)
+            if not owner:
+                return False, "目标公司所有者不存在。", False
+
+            # 自己给自己公司注资，仍允许直接执行
+            if owner.tg_id == investor_tg_id:
+                ok, msg = await invest(session, investor_user_id, target_company_id, amount)
+                return ok, msg, False
+
+            # 他人公司必须审批
+            ok, msg = await _create_invest_approval_request(
+                bot,
+                investor_tg_id=investor_tg_id,
+                investor_name=investor_name,
+                target_tg_id=owner.tg_id,
+                target_company_id=target_company_id,
+                target_company_name=company.name,
+                amount=amount,
+            )
+            return ok, msg, True
+
+
+@router.callback_query(F.data.startswith("shareholder:invreq:"))
+async def cb_invest_approval(callback: types.CallbackQuery):
+    parts = callback.data.split(":")
+    if len(parts) < 4:
+        await callback.answer("请求格式错误", show_alert=True)
+        return
+    action = parts[2]
+    token = parts[3]
+
+    async with RedisLock(f"invest_approval:{token}", timeout=5):
+        r = await get_redis()
+        raw = await r.get(_approval_key(token))
+        if not raw:
+            await callback.answer("该请求已过期或已处理。", show_alert=True)
+            return
+
+        try:
+            req = json.loads(raw)
+        except Exception:
+            await r.delete(_approval_key(token))
+            await callback.answer("请求数据损坏，已作废。", show_alert=True)
+            return
+
+        target_tg_id = int(req.get("target_tg_id", 0))
+        investor_tg_id = int(req.get("investor_tg_id", 0))
+        target_company_id = int(req.get("target_company_id", 0))
+        amount = int(req.get("amount", 0))
+        target_company_name = str(req.get("target_company_name", "未知公司"))
+
+        if callback.from_user.id != target_tg_id:
+            await callback.answer("这不是发给你的审批请求。", show_alert=True)
+            return
+
+        if action == "reject":
+            await r.delete(_approval_key(token))
+            await callback.message.edit_text(
+                "❌ 你已拒绝该注资请求。\n"
+                f"目标公司：{target_company_name}\n"
+                f"金额：{fmt_traffic(amount)}"
+            )
+            await _notify_investor(
+                callback.bot,
+                investor_tg_id,
+                (
+                    "❌ 对方拒绝了你的注资请求。\n"
+                    f"目标公司：{target_company_name}\n"
+                    f"金额：{fmt_traffic(amount)}"
+                ),
+            )
+            await callback.answer("已拒绝")
+            return
+
+        if action != "approve":
+            await callback.answer("未知操作", show_alert=True)
+            return
+
+        ok = False
+        msg = "注资失败"
+        async with async_session() as session:
+            async with session.begin():
+                target_user = await get_user_by_tg_id(session, target_tg_id)
+                investor_user = await get_user_by_tg_id(session, investor_tg_id)
+                company = await get_company_by_id(session, target_company_id)
+
+                if not target_user or not investor_user:
+                    msg = "用户不存在或未注册，注资失败。"
+                elif not company or company.owner_id != target_user.id:
+                    msg = "目标公司状态已变化，注资失败。"
+                else:
+                    ok, msg = await invest(session, investor_user.id, target_company_id, amount)
+                    target_company_name = company.name
+
+        await r.delete(_approval_key(token))
 
     if ok:
-        await message.answer(f"{invest_msg}\n目标公司：{target_company.name}")
+        await callback.message.edit_text(
+            "✅ 你已同意该注资请求。\n"
+            f"目标公司：{target_company_name}\n"
+            f"金额：{fmt_traffic(amount)}"
+        )
+        await _notify_investor(
+            callback.bot,
+            investor_tg_id,
+            f"✅ 对方已同意注资请求：{msg}\n目标公司：{target_company_name}",
+        )
+        await callback.answer("已同意")
         return
-    await message.answer(invest_msg)
+
+    await callback.message.edit_text(
+        "⚠️ 你已同意，但执行注资失败。\n"
+        f"原因：{msg}"
+    )
+    await _notify_investor(
+        callback.bot,
+        investor_tg_id,
+        f"⚠️ 对方已同意，但注资执行失败：{msg}",
+    )
+    await callback.answer("执行失败", show_alert=True)
 
 
 @router.message(Command(CMD_INVEST))
 async def cmd_reply_invest(message: types.Message):
-    """回复目标用户消息并注资。用法：/company_invest <金额>"""
+    """回复目标用户消息并注资。用法：/cp_invest <金额>"""
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) < 2:
         await message.answer(
-            "用法：回复目标用户消息，发送 /company_invest <金额>\n"
-            "示例：/company_invest 5000"
+            "用法：回复目标用户消息，发送 /cp_invest <金额>\n"
+            "示例：/cp_invest 5000"
         )
         return
 
@@ -264,16 +485,23 @@ async def on_custom_invest_amount(message: types.Message, state: FSMContext):
         return
 
     tg_id = message.from_user.id
+    await state.clear()
     async with async_session() as session:
         async with session.begin():
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
-                await state.clear()
-                await message.answer("请先 /company_create 创建公司")
+                await message.answer("请先 /cp_create 创建公司")
                 return
-            ok, msg = await invest(session, user.id, company_id, amount)
 
-    await state.clear()
+    ok, msg, pending = await _queue_approval_or_invest_direct(
+        bot=message.bot,
+        investor_tg_id=tg_id,
+        investor_user_id=user.id,
+        investor_name=message.from_user.full_name or str(tg_id),
+        target_company_id=company_id,
+        amount=amount,
+    )
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="继续注资", callback_data=f"shareholder:invest:{company_id}")],
         [InlineKeyboardButton(text="返回公司", callback_data=f"company:view:{company_id}")],
@@ -293,10 +521,19 @@ async def cb_do_invest(callback: types.CallbackQuery):
         async with session.begin():
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
-                await callback.answer("请先 /company_create 创建公司", show_alert=True)
+                await callback.answer("请先 /cp_create 创建公司", show_alert=True)
                 return
-            ok, msg = await invest(session, user.id, company_id, amount)
+            investor_user_id = user.id
+
+    ok, msg, pending = await _queue_approval_or_invest_direct(
+        bot=callback.bot,
+        investor_tg_id=tg_id,
+        investor_user_id=investor_user_id,
+        investor_name=callback.from_user.full_name or str(tg_id),
+        target_company_id=company_id,
+        amount=amount,
+    )
 
     await callback.answer(msg, show_alert=True)
-    if ok:
+    if ok and not pending:
         await _refresh_shareholder_list(callback, company_id)

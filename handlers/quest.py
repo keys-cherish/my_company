@@ -1,4 +1,4 @@
-"""Weekly quest handler — /company_quest command and inline panel."""
+"""Weekly quest handler — /cp_quest command and inline panel."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ async def cmd_quest(message: types.Message):
         async with session.begin():
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
-                await message.answer("请先 /company_create 创建公司")
+                await message.answer("请先 /cp_create 创建公司")
                 return
             tasks = await get_or_create_weekly_tasks(session, user.id)
 
@@ -86,7 +86,7 @@ async def cb_quest_menu(callback: types.CallbackQuery):
         async with session.begin():
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
-                await callback.answer("请先 /company_create 创建公司", show_alert=True)
+                await callback.answer("请先 /cp_create 创建公司", show_alert=True)
                 return
             tasks = await get_or_create_weekly_tasks(session, user.id)
 
@@ -107,7 +107,7 @@ async def cb_quest_claim(callback: types.CallbackQuery):
         async with session.begin():
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
-                await callback.answer("请先 /company_create 创建公司", show_alert=True)
+                await callback.answer("请先 /cp_create 创建公司", show_alert=True)
                 return
             ok, msg = await claim_quest_reward(session, user.id, quest_id)
 

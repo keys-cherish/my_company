@@ -121,11 +121,11 @@ async def _execute_dividend(
     return True, f"分红成功！税后实发: {fmt_traffic(total_distributed)}，税金: {fmt_traffic(actual_tax)}", distributions
 
 
-# ---- /company_dividend 命令 ----
+# ---- /cp_dividend 命令 ----
 
 @router.message(Command(CMD_DIVIDEND))
 async def cmd_dividend(message: types.Message):
-    """命令分红：/company_dividend <金额>
+    """命令分红：/cp_dividend <金额>
 
     从公司积分中分红给所有股东，按股份比例分配，扣除分红税后到账个人余额。
     """
@@ -135,8 +135,8 @@ async def cmd_dividend(message: types.Message):
     if len(parts) < 2:
         await message.answer(
             f"💸 分红命令用法:\n"
-            f"/company_dividend <金额>\n\n"
-            f"示例: /company_dividend 10000\n\n"
+            f"/cp_dividend <金额>\n\n"
+            f"示例: /cp_dividend 10000\n\n"
             f"⚠️ 分红税率: {int(DIVIDEND_TAX_RATE * 100)}%\n"
             f"分红后扣税，税后金额进入股东个人余额"
         )
@@ -144,19 +144,19 @@ async def cmd_dividend(message: types.Message):
 
     amount = _parse_amount(parts[1])
     if amount is None:
-        await message.answer("❌ 金额必须为正整数，示例: /company_dividend 10000")
+        await message.answer("❌ 金额必须为正整数，示例: /cp_dividend 10000")
         return
 
     async with async_session() as session:
         async with session.begin():
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
-                await message.answer("请先 /company_start 注册账号")
+                await message.answer("请先 /cp_start 注册账号")
                 return
 
             companies = await get_companies_by_owner(session, user.id)
             if not companies:
-                await message.answer("你还没有公司，请先 /company_create 创建公司")
+                await message.answer("你还没有公司，请先 /cp_create 创建公司")
                 return
 
             # 默认使用第一家公司
@@ -422,7 +422,7 @@ async def on_custom_dividend_amount(message: types.Message, state: FSMContext):
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
                 await state.clear()
-                await message.answer("请先 /company_create 创建公司")
+                await message.answer("请先 /cp_create 创建公司")
                 return
 
             company = await get_company_by_id(session, company_id)
@@ -518,7 +518,7 @@ async def cb_dividend_menu(callback: types.CallbackQuery):
     async with async_session() as session:
         user = await get_user_by_tg_id(session, tg_id)
         if not user:
-            await callback.answer("请先 /company_create 创建公司", show_alert=True)
+            await callback.answer("请先 /cp_create 创建公司", show_alert=True)
             return
         companies = await get_companies_by_owner(session, user.id)
 

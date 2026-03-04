@@ -1,7 +1,7 @@
 """公司红包处理器 — 发红包/抢红包。
 
 Usage:
-  /company_redpacket <总金额> <个数> [口令]   — 发红包（从公司积分扣除）
+  /cp_redpacket <总金额> <个数> [口令]   — 发红包（从公司积分扣除）
   点击「🧧 抢红包」按钮                      — 抢红包（奖励存入个人/公司）
   口令红包需要输入正确口令才能抢
 """
@@ -141,7 +141,7 @@ async def _refresh_detail_message_if_needed(callback: types.CallbackQuery, packe
 
 @router.message(Command(CMD_REDPACKET))
 async def cmd_redpacket(message: types.Message):
-    """发红包命令：/company_redpacket <总金额> <个数> [口令]"""
+    """发红包命令：/cp_redpacket <总金额> <个数> [口令]"""
     tg_id = message.from_user.id
     args = (message.text or "").split()
 
@@ -149,9 +149,9 @@ async def cmd_redpacket(message: types.Message):
         await message.answer(
             "🧧 公司红包\n"
             f"{'─' * 24}\n"
-            "用法: /company_redpacket <总金额> <个数> [口令]\n"
-            "例: /company_redpacket 5000 5\n"
-            "例: /company_redpacket 5000 5 恭喜发财\n"
+            "用法: /cp_redpacket <总金额> <个数> [口令]\n"
+            "例: /cp_redpacket 5000 5\n"
+            "例: /cp_redpacket 5000 5 恭喜发财\n"
             f"{'─' * 24}\n"
             f"最低: {settings.redpacket_min_amount:,} 积分\n"
             f"最高: {settings.redpacket_max_amount:,} 积分\n"
@@ -251,7 +251,7 @@ async def cb_password_prompt(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer(
         "🔐 请输入红包口令：\n"
         "（直接发送口令文本即可）\n"
-        "发送 /cancel 取消"
+        "发送 /cp_cancel 取消"
     )
 
 
@@ -275,7 +275,7 @@ async def on_password_input(message: types.Message, state: FSMContext):
     # 验证口令
     ok, err = await check_password(packet_id, text)
     if not ok:
-        await message.answer(f"{err}\n请重新输入口令，或发送 /cancel 取消")
+        await message.answer(f"{err}\n请重新输入口令，或发送 /cp_cancel 取消")
         return
 
     await state.clear()

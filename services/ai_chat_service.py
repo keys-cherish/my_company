@@ -24,7 +24,7 @@ GAME_SYSTEM_PROMPT = (
     "当用户提问不完整时，先给最稳妥方案，再给最多2个可选策略。"
     "不编造未确认事实；不确定时明确说明并建议如何验证。"
     "你可以使用提供的工具帮用户查询游戏数据或执行游戏操作。"
-    "涉及商战(/company_battle)、合作(/company_cooperate)、投资(/company_invest)等需要指定目标玩家的操作，"
+    "涉及商战(/cp_battle)、合作(/cp_cooperate)、投资(/cp_invest)等需要指定目标玩家的操作，"
     "请告诉用户回复目标消息并使用对应命令。"
 )
 
@@ -299,7 +299,7 @@ async def _exec_get_my_profile(tg_id: int) -> str:
     async with async_session() as session:
         user = await get_user_by_tg_id(session, tg_id)
         if not user:
-            return "用户未注册，请先使用 /company_start 注册。"
+            return "用户未注册，请先使用 /cp_start 注册。"
         companies = await get_companies_by_owner(session, user.id)
         company_names = ", ".join(c.name for c in companies) if companies else "无"
 
@@ -332,7 +332,7 @@ async def _exec_get_my_company(tg_id: int) -> str:
             return "用户未注册。"
         companies = await get_companies_by_owner(session, user.id)
         if not companies:
-            return "你还没有公司，可以使用 /company_create 创建一家。"
+            return "你还没有公司，可以使用 /cp_create 创建一家。"
 
         company = companies[0]
         type_info = get_company_type_info(company.company_type) or {}

@@ -75,7 +75,7 @@ def _register_routers(dp: Dispatcher):
     dp.include_router(roulette_router)
 
     # 私聊兜底：非管理员只允许常用命令，管理员放行
-    from handlers.common import reject_private, is_admin_authenticated
+    from handlers.common import reject_private
     from aiogram import F, Router
     from aiogram.fsm.context import FSMContext
     fallback = Router()
@@ -86,35 +86,36 @@ def _register_routers(dp: Dispatcher):
         if current_state is not None:
             return
         allowed_prefixes = (
-            "/block",
-            "/unblock",
-            "/company",
-            "/company_list",
-            "/company_member",
-            "/company_invest",
-            "/company_start",
-            "/company_create",
-            "/company_admin",
-            "/company_help",
-            "/company_battle",
-            "/company_cooperate",
+            "/cp",
+            "/cp_list",
+            "/cp_log",
+            "/cp_transfer",
+            "/cp_member",
+            "/cp_invest",
+            "/cp_dividend",
+            "/cp_exchange",
+            "/cp_rename",
+            "/cp_start",
+            "/cp_create",
+            "/cp_help",
+            "/cp_battle",
+            "/cp_cooperate",
             "/cp_new_product",
-            "/company_dissolve",
-            "/company_clear",
-            "/company_rank",
-            "/company_makeup",
-            "/company_give",
-            "/company_welfare",
-            "/company_quest",
-            "/company_cleanup",
-            "/company_cancel",
-            "/company_checkin",
-            "/company_redpacket",
+            "/cp_dissolve",
+            "/cp_rank",
+            "/cp_makeup",
+            "/cp_give",
+            "/cp_welfare",
+            "/cp_quest",
+            "/cp_cleanup",
+            "/cp_maintain",
+            "/cp_compensate",
+            "/cp_cancel",
+            "/cp_checkin",
+            "/cp_redpacket",
             "/cp_slot",
         )
         if message.text and message.text.startswith(allowed_prefixes):
-            return
-        if await is_admin_authenticated(message.from_user.id):
             return
         await reject_private(message)
 
@@ -143,9 +144,12 @@ async def main():
     # 注册限流中间件
     from utils.throttle import ThrottleMiddleware
     from utils.topic_gate import TopicGateMiddleware
+    from utils.maintenance import MaintenanceModeMiddleware
     from utils.stream_event import StreamEventMiddleware
     dp.message.middleware(TopicGateMiddleware())
     dp.callback_query.middleware(TopicGateMiddleware())
+    dp.message.middleware(MaintenanceModeMiddleware())
+    dp.callback_query.middleware(MaintenanceModeMiddleware())
     dp.message.middleware(StreamEventMiddleware())
     dp.callback_query.middleware(StreamEventMiddleware())
     dp.message.middleware(ThrottleMiddleware())

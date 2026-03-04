@@ -4,27 +4,34 @@ from __future__ import annotations
 
 from aiogram import F, Router, types
 from aiogram.filters import Command
-from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeChatMember
+from aiogram.types import BotCommand
 
 from cache.redis_client import get_leaderboard
 from commands import (
-    CMD_ADMIN,
     CMD_BATTLE,
-    CMD_BLOCK,
+    CMD_CANCEL,
+    CMD_CLEANUP,
     CMD_COOPERATE,
     CMD_COMPANY,
     CMD_CREATE_COMPANY,
+    CMD_DIVIDEND,
     CMD_DISSOLVE,
+    CMD_EXCHANGE,
     CMD_GIVE_MONEY,
     CMD_HELP,
+    CMD_LOG,
     CMD_LIST_COMPANY,
+    CMD_COMPENSATE,
+    CMD_MAINTAIN,
+    CMD_MAKEUP,
     CMD_MEMBER,
     CMD_INVEST,
     CMD_NEW_PRODUCT,
     CMD_QUEST,
     CMD_RANK_COMPANY,
-    CMD_UNBLOCK,
+    CMD_RENAME,
     CMD_START,
+    CMD_TRANSFER,
     CMD_WELFARE,
     CMD_CHECKIN,
     CMD_REDPACKET,
@@ -45,21 +52,29 @@ BOT_COMMANDS = [
     BotCommand(command=CMD_COMPANY, description="我的公司"),
     BotCommand(command=CMD_LIST_COMPANY, description="查看全服公司"),
     BotCommand(command=CMD_RANK_COMPANY, description="综合实力排行榜"),
+    BotCommand(command=CMD_RENAME, description="公司改名"),
     BotCommand(command=CMD_BATTLE, description="商战（回复+可选战术）"),
     BotCommand(command=CMD_COOPERATE, description="合作（回复/all）"),
     BotCommand(command=CMD_NEW_PRODUCT, description="创建产品（模板key [名称]）"),
     BotCommand(command=CMD_MEMBER, description="员工管理（add/minus 数量）"),
-    BotCommand(command=CMD_INVEST, description="Reply invest to user"),
+    BotCommand(command=CMD_INVEST, description="注资（需回复目标）"),
+    BotCommand(command=CMD_DIVIDEND, description="公司分红（金额）"),
+    BotCommand(command=CMD_TRANSFER, description="个人转账（需回复目标）"),
+    BotCommand(command=CMD_LOG, description="资金流水（user/company）"),
+    BotCommand(command=CMD_EXCHANGE, description="交易所（商城/黑市）"),
     BotCommand(command=CMD_DISSOLVE, description="注销公司"),
     BotCommand(command=CMD_QUEST, description="周任务清单"),
     BotCommand(command=CMD_HELP, description="帮助信息"),
-    BotCommand(command=CMD_GIVE_MONEY, description="超管发放积分（回复+积分）"),
-    BotCommand(command=CMD_WELFARE, description="超管全服福利（每家100万）"),
+    BotCommand(command=CMD_CANCEL, description="取消当前输入流程"),
+    BotCommand(command=CMD_GIVE_MONEY, description="【超管】发放积分（回复）"),
+    BotCommand(command=CMD_WELFARE, description="【超管】全服福利"),
+    BotCommand(command=CMD_CLEANUP, description="【超管】清理残留数据"),
+    BotCommand(command=CMD_MAKEUP, description="【超管】数据修复检查"),
+    BotCommand(command=CMD_MAINTAIN, description="【超管】停机维护（锁全局）"),
+    BotCommand(command=CMD_COMPENSATE, description="【超管】停机补偿（每人+500）"),
     BotCommand(command="cp_slot", description="🎰 老虎机（每日奖励一次）"),
     BotCommand(command=CMD_CHECKIN, description="🏢 每日打卡（连续签到领奖励）"),
     BotCommand(command=CMD_REDPACKET, description="🧧 发红包（金额 个数）"),
-    BotCommand(command=CMD_BLOCK, description="隐藏本聊天命令菜单"),
-    BotCommand(command=CMD_UNBLOCK, description="恢复本聊天命令菜单"),
 ]
 
 HELP_TEXT = (
@@ -67,29 +82,40 @@ HELP_TEXT = (
     f"{'─' * 24}\n"
     "通过 科研→产品→利润 的路径经营虚拟公司\n\n"
     "📋 命令列表:\n\n"
-    "/company_start — 开始游戏（自动注册+创建公司）\n"
-    "/company_create — 创建公司\n"
-    "/company — 查看和管理公司\n"
-    "/company_list — 全服公司列表\n"
-    "/company_rank — 综合实力排行\n\n"
-    "⚔️ /company_battle [战术] — 回复某人发起商战（每次消耗200积分）\n"
+    "/cp_start — 开始游戏（自动注册+创建公司）\n"
+    "/cp_create — 创建公司\n"
+    "/cp — 查看和管理公司\n"
+    "/cp_list — 全服公司列表\n"
+    "/cp_rank — 综合实力排行\n\n"
+    "⚔️ /cp_battle [战术] — 回复某人发起商战（每次消耗200积分）\n"
     "  战术: 稳扎稳打 / 激进营销 / 奇袭渗透\n"
-    "🤝 /company_cooperate — 回复某人/all 合作\n"
+    "🤝 /cp_cooperate — 回复某人/all 合作\n"
     "  每次+2%（上限50%），次日清空，双方各+30声望\n\n"
     "📦 /cp_new_product <模板key> [自定义名称]\n"
     "  仅可创建已通过科研解锁的产品模板\n"
     "  可不填自定义名称，不填则使用模板默认名\n\n"
-    "👷 /company_member add|minus <数量|max>\n"
-    "/company_invest <积分> - reply target user to invest and gain shares\n"
+    "👷 /cp_member add|minus <数量|max>\n"
+    "/cp_rename <新名字> — 公司改名\n"
+    "/cp_invest <积分> - reply target user to invest and gain shares\n"
+    "/cp_dividend <金额> — 公司分红\n"
+    "/cp_transfer <金额> — 回复目标进行个人转账\n"
+    "/cp_log [user|company] — 资金流水\n"
+    "/cp_exchange — 交易所（商城/黑市）\n"
     "Reply shortcut: invest5000 (must reply target message)\n"
-    "🗑 /company_dissolve — 注销公司(24h冷却)\n"
-    "/company_admin <密钥> — 管理员认证\n"
-    "/company_help — 显示此帮助\n"
-    "\n🎰 /cp_slot — 老虎机（三个一样中奖，777大奖77777！每日奖励一次）\n"    "\n🏢 /company_checkin — 每日打卡（连续签到7天开宝箱！）\n"
-    "🧧 /company_redpacket <金额> <个数> — 发公司红包，群里抢！\n"
-    "🙈 /block — 隐藏当前聊天命令菜单（输入 / 不再弹机器人命令）\n"
-    "🙉 /unblock — 恢复当前聊天命令菜单\n"
-    "\n📶 积分兑换流量：交易所→积分→流量\n"    "\n🤖 AI对话: 任意消息带 @机器人用户名 即可调用\n"
+    "🗑 /cp_dissolve — 注销公司(24h冷却)\n"
+    "/cp_cancel — 取消当前输入流程\n"
+    "/cp_help — 显示此帮助\n"
+    "\n🎰 /cp_slot — 老虎机（三个一样中奖，777大奖77777！每日奖励一次）\n"
+    "🏢 /cp_checkin — 每日打卡（连续签到7天开宝箱！）\n"
+    "🧧 /cp_redpacket <金额> <个数> — 发公司红包，群里抢！\n"
+    "\n🔒 超管专用命令：\n"
+    "/cp_give <积分> — 【超管】回复目标发放积分\n"
+    "/cp_welfare — 【超管】全服公司福利\n"
+    "/cp_cleanup — 【超管】清理Redis/DB残留\n"
+    "/cp_makeup — 【超管】数据修复检查\n"
+    "/cp_maintain [更新说明] — 【超管】进入停机维护并置顶公告\n"
+    "/cp_compensate <更新说明> — 【超管】解除维护+全员补偿500并置顶\n"
+    "\n🤖 AI对话: 任意消息带 @机器人用户名 即可调用\n"
     "普通用户每分钟最多 10 次，管理员/超管不限制\n"
 )
 
@@ -126,28 +152,6 @@ async def cmd_help(message: types.Message):
     await message.answer(HELP_TEXT)
 
 
-def _member_scope_for_message(message: types.Message):
-    if message.chat.type == "private":
-        return BotCommandScopeChat(chat_id=message.chat.id)
-    return BotCommandScopeChatMember(chat_id=message.chat.id, user_id=message.from_user.id)
-
-
-@router.message(Command(CMD_BLOCK))
-async def cmd_block(message: types.Message):
-    """Hide this bot's command menu for current user in current chat."""
-    scope = _member_scope_for_message(message)
-    await message.bot.set_my_commands([], scope=scope)
-    await message.answer("🙈 已隐藏当前聊天的机器人命令菜单。\n恢复请发送 /unblock")
-
-
-@router.message(Command(CMD_UNBLOCK))
-async def cmd_unblock(message: types.Message):
-    """Restore default command menu for current user in current chat."""
-    scope = _member_scope_for_message(message)
-    await message.bot.delete_my_commands(scope=scope)
-    await message.answer("🙉 已恢复当前聊天的机器人命令菜单。")
-
-
 @router.callback_query(F.data == "menu:main")
 async def cb_menu_main(callback: types.CallbackQuery):
     await callback.message.edit_text(
@@ -165,7 +169,7 @@ async def cb_menu_profile(callback: types.CallbackQuery):
         from services.user_service import get_user_by_tg_id
         user = await get_user_by_tg_id(session, tg_id)
         if not user:
-            await callback.answer("请先 /company_create 创建公司", show_alert=True)
+            await callback.answer("请先 /cp_create 创建公司", show_alert=True)
             return
         companies = await get_companies_by_owner(session, user.id)
         traffic = user.traffic

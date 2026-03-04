@@ -95,7 +95,7 @@ async def update_quest_progress(
 
         if task.progress >= task.target and not task.completed:
             task.completed = 1
-            messages.append(f"🎯 周任务「{q['name']}」完成! 使用 /company_quest 领取奖励")
+            messages.append(f"🎯 周任务「{q['name']}」完成! 使用 /cp_quest 领取奖励")
 
     await session.flush()
     return messages

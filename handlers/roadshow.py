@@ -20,7 +20,7 @@ async def cb_roadshow_menu(callback: types.CallbackQuery):
     async with async_session() as session:
         user = await get_user_by_tg_id(session, tg_id)
         if not user:
-            await callback.answer("请先 /company_create 创建公司", show_alert=True)
+            await callback.answer("请先 /cp_create 创建公司", show_alert=True)
             return
         companies = await get_companies_by_owner(session, user.id)
 
@@ -55,7 +55,7 @@ async def cb_do_roadshow(callback: types.CallbackQuery, company_id: int | None =
         async with session.begin():
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
-                await callback.answer("请先 /company_create 创建公司", show_alert=True)
+                await callback.answer("请先 /cp_create 创建公司", show_alert=True)
                 return
             company = await get_company_by_id(session, company_id)
             if not company or company.owner_id != user.id:

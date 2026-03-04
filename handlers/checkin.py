@@ -26,7 +26,7 @@ def _checkin_kb(tg_id: int | None = None) -> InlineKeyboardMarkup:
 
 @router.message(Command(CMD_CHECKIN))
 async def cmd_checkin(message: types.Message):
-    """命令入口：/company_checkin"""
+    """命令入口：/cp_checkin"""
     tg_id = message.from_user.id
     await _do_checkin(message, tg_id, is_callback=False)
 

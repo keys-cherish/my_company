@@ -87,7 +87,6 @@ class Settings(BaseSettings):
     # Reputation buff
     max_reputation_buff_pct: float = 0.50  # max 50% revenue buff
     reputation_per_research: int = 5
-    reputation_per_cooperation: int = 10
     reputation_per_dividend: int = 3
 
     # Settlement
@@ -110,8 +109,6 @@ class Settings(BaseSettings):
     employee_limit_growth_exponent: float = 2.2  # level->employee limit curve
     employee_effective_cap_for_progress: int = 600  # soft cap to avoid revenue inflation
     employee_salary_base: int = 80  # base daily salary per employee
-    employee_base_output: int = 100  # base daily income per employee (人均基础产出)
-    employee_efficiency_rate: float = 0.003  # product income boost per sqrt(employee) (效率加成系数)
 
     # Random events
     event_chance: float = 0.35  # 35% chance per company per day
@@ -140,13 +137,6 @@ class Settings(BaseSettings):
     bounty_ttl_seconds: int = 86400
     bounty_cooldown_seconds: int = 7200
 
-    # 积分兑换真实流量 (个人积分 → MB/GB流量)
-    # 满级公司(Lv.10)每日营收约30万+，按比例计算日上限不超过5TB
-    traffic_exchange_rate: int = 100  # 100积分 = 1MB
-    traffic_exchange_api_url: str = ""  # 外部流量发放接口URL，空=未接入
-    traffic_exchange_api_key: str = ""  # 外部接口密钥
-    traffic_exchange_daily_limit_mb: int = 5_000_000  # 每人每日上限 5TB = 5,000,000MB
-
     # AI API（AI研发评审）
     ai_enabled: bool = True
     ai_provider: str = "openai_compatible"  # openai_compatible / deepseek / custom
@@ -165,17 +155,10 @@ class Settings(BaseSettings):
     # 额外请求头，JSON格式；例如 {"X-Api-Version":"2024-01-01"}
     ai_extra_headers_json: str = ""
 
-    # 流量来源接口（预置参数，后续接入外部API）
-    traffic_api_url: str = ""  # 外部流量接口URL
-    traffic_api_key: str = ""  # 外部接口认证密钥
-    traffic_total_pool: int = 10_000_000  # 全局流量池总量
-    traffic_daily_distribution: int = 100_000  # 每日可分配流量
-
     # 管理员
     super_admin_tg_id: int = 0  # 兼容旧配置：单个超级管理员TG ID（高危命令）
     super_admin_tg_ids: str = ""  # 新配置：逗号分隔的超级管理员TG ID列表
     admin_tg_ids: str = ""  # 逗号分隔的管理员TG ID列表
-    admin_secret_key: str = ""  # 管理员认证密钥
 
     @property
     def admin_tg_id_set(self) -> set[int]:

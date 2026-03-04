@@ -106,7 +106,7 @@ async def cb_ops_do_work(callback: types.CallbackQuery):
         async with session.begin():
             user = await get_user_by_tg_id(session, callback.from_user.id)
             if not user:
-                await callback.answer("请先 /company_create 创建公司", show_alert=True)
+                await callback.answer("请先 /cp_create 创建公司", show_alert=True)
                 return
             ok, msg = await set_work_hours(session, cid, user.id, hours)
     await callback.answer(msg, show_alert=True)
@@ -253,7 +253,7 @@ async def cb_ops_do_cycle(callback: types.CallbackQuery):
         async with session.begin():
             user = await get_user_by_tg_id(session, callback.from_user.id)
             if not user:
-                await callback.answer("请先 /company_create 创建公司", show_alert=True)
+                await callback.answer("请先 /cp_create 创建公司", show_alert=True)
                 return
             ok, msg = await cycle_option(session, cid, user.id, field)
     await callback.answer(msg, show_alert=True)
@@ -280,7 +280,7 @@ async def cb_ops_train(callback: types.CallbackQuery):
             async with session.begin():
                 user = await get_user_by_tg_id(session, callback.from_user.id)
                 if not user:
-                    await callback.answer("请先 /company_create 创建公司", show_alert=True)
+                    await callback.answer("请先 /cp_create 创建公司", show_alert=True)
                     return
                 ok, msg = await start_training(session, cid, user.id, "none")
         await callback.answer(msg, show_alert=True)
@@ -360,7 +360,7 @@ async def cb_ops_do_train(callback: types.CallbackQuery):
         async with session.begin():
             user = await get_user_by_tg_id(session, callback.from_user.id)
             if not user:
-                await callback.answer("请先 /company_create 创建公司", show_alert=True)
+                await callback.answer("请先 /cp_create 创建公司", show_alert=True)
                 return
             ok, msg = await start_training(session, cid, user.id, level)
     await callback.answer(msg, show_alert=True)

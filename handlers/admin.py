@@ -1,8 +1,4 @@
-"""管理员认证和配置面板。
-
-/company_admin <密钥> — 认证管理员（需同时满足ID白名单+密钥）
-认证后可私聊使用所有游戏功能 + 管理员配置面板
-"""
+"""超管维护命令。"""
 
 from __future__ import annotations
 
@@ -10,20 +6,18 @@ import datetime as dt
 
 from aiogram import F, Router, types
 from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-
-from commands import CMD_ADMIN, CMD_CLEANUP, CMD_GIVE_MONEY, CMD_WELFARE
+from commands import (
+    CMD_CLEANUP,
+    CMD_COMPENSATE,
+    CMD_GIVE_MONEY,
+    CMD_MAINTAIN,
+    CMD_WELFARE,
+)
 from db.engine import async_session
 from handlers.common import (
-    authenticate_admin,
-    is_admin_authenticated,
     is_super_admin,
-    super_admin_only,
 )
-from keyboards.menus import main_menu_kb, tag_kb
 from services.ad_service import get_active_ad_info
 from services.company_service import (
     add_funds,
@@ -33,6 +27,14 @@ from services.company_service import (
 )
 from services.cooperation_service import get_active_cooperations
 from services.user_service import add_points, add_traffic, get_user_by_tg_id
+from utils.maintenance import (
+    COMPENSATION_PIN_KEY,
+    MAINTENANCE_COMPENSATION_BONUS,
+    MAINTENANCE_MODE_KEY,
+    MAINTENANCE_PIN_KEY,
+    clear_maintenance_mode,
+    set_maintenance_mode,
+)
 from utils.formatters import fmt_currency, fmt_duration, reputation_buff_multiplier
 
 router = Router()
@@ -207,53 +209,6 @@ async def cb_buff_list(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# ---- 管理员认证 ----
-
-@router.message(Command(CMD_ADMIN))
-async def cmd_admin(message: types.Message):
-    """管理员认证: /company_admin <密钥>"""
-    tg_id = message.from_user.id
-    if not is_super_admin(tg_id):
-        await message.answer("❌ 无权使用此命令")
-        return
-
-    # 解析密钥参数
-    parts = message.text.strip().split(maxsplit=1)
-    if len(parts) < 2:
-        # 已认证的管理员直接打开面板
-        if await is_admin_authenticated(tg_id):
-            # 私聊中删除命令消息（避免密钥残留在聊天记录）
-            if message.chat.type == "private":
-                try:
-                    await message.delete()
-                except Exception:
-                    pass
-            await message.answer(
-                "⚙️ 管理员配置面板\n当前参数可实时修改:",
-                reply_markup=_admin_menu_kb(tg_id=tg_id),
-            )
-            return
-        await message.answer("用法: /company_admin <密钥>")
-        return
-
-    secret_key = parts[1].strip()
-
-    # 尝试删除包含密钥的消息（防止密钥泄露到聊天记录）
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-    ok, msg = await authenticate_admin(tg_id, secret_key)
-    if ok:
-        await message.answer(
-            f"✅ {msg}\n\n⚙️ 管理员配置面板:",
-            reply_markup=_admin_menu_kb(tg_id=tg_id),
-        )
-    else:
-        await message.answer(f"❌ 认证失败: {msg}")
-
-
 @router.message(Command(CMD_GIVE_MONEY))
 async def cmd_give_money(message: types.Message):
     """超管命令：回复某人并发放积分，同时奖励荣誉点。"""
@@ -263,11 +218,11 @@ async def cmd_give_money(message: types.Message):
 
     args = (message.text or "").split(maxsplit=1)
     if len(args) < 2:
-        await message.answer("用法: 回复某人消息并发送 /company_give <积分>")
+        await message.answer("用法: 回复某人消息并发送 /cp_give <积分>")
         return
 
     if not message.reply_to_message or not message.reply_to_message.from_user:
-        await message.answer("用法: 回复某人消息并发送 /company_give <积分>")
+        await message.answer("用法: 回复某人消息并发送 /cp_give <积分>")
         return
 
     target = message.reply_to_message.from_user
@@ -292,7 +247,7 @@ async def cmd_give_money(message: types.Message):
         async with session.begin():
             user = await get_user_by_tg_id(session, target.id)
             if not user:
-                await message.answer("❌ 目标用户未注册，请先让对方 /company_start")
+                await message.answer("❌ 目标用户未注册，请先让对方 /cp_start")
                 return
 
             target_companies = await get_companies_by_owner(session, user.id)
@@ -361,124 +316,173 @@ async def cmd_welfare(message: types.Message):
     )
 
 
-# ---- 管理员配置菜单 ----
+async def _unpin_and_delete_stored_notice(bot: types.Bot, redis_key: str) -> None:
+    from cache.redis_client import get_redis
+    import json
 
-class AdminConfigState(StatesGroup):
-    waiting_param_value = State()
-
-
-def _admin_menu_kb(tg_id: int | None = None) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="初始积分", callback_data="admin:cfg:initial_traffic")],
-        [InlineKeyboardButton(text="创建公司费用", callback_data="admin:cfg:company_creation_cost")],
-        [InlineKeyboardButton(text="最低老板持股%", callback_data="admin:cfg:min_owner_share_pct")],
-        [InlineKeyboardButton(text="税率", callback_data="admin:cfg:tax_rate")],
-        [InlineKeyboardButton(text="分红比例", callback_data="admin:cfg:dividend_pct")],
-        [InlineKeyboardButton(text="员工基础薪资", callback_data="admin:cfg:employee_salary_base")],
-        [InlineKeyboardButton(text="路演费用", callback_data="admin:cfg:roadshow_cost")],
-        [InlineKeyboardButton(text="路演冷却(秒)", callback_data="admin:cfg:roadshow_cooldown_seconds")],
-        [InlineKeyboardButton(text="产品创建费用", callback_data="admin:cfg:product_create_cost")],
-        [InlineKeyboardButton(text="手动结算", callback_data="admin:settle")],
-        [InlineKeyboardButton(text="退出管理员模式", callback_data="admin:logout")],
-        [InlineKeyboardButton(text="🔙 关闭", callback_data="admin:close")],
-    ])
-    return tag_kb(kb, tg_id)
-
-
-@router.callback_query(F.data.startswith("admin:cfg:"), super_admin_only)
-async def cb_admin_cfg(callback: types.CallbackQuery, state: FSMContext):
-    param = callback.data.split(":")[2]
-    from config import settings
-    current = getattr(settings, param, "未知")
-    await callback.message.edit_text(
-        f"⚙️ 修改参数: {param}\n当前值: {current}\n\n请输入新值:"
-    )
-    await state.set_state(AdminConfigState.waiting_param_value)
-    await state.update_data(param=param)
-    await callback.answer()
-
-
-@router.message(AdminConfigState.waiting_param_value, super_admin_only)
-async def on_admin_param_value(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    param = data["param"]
-    value_str = message.text.strip()
-
-    from config import settings
-    current = getattr(settings, param, None)
-    if current is None:
-        await message.answer("参数不存在")
-        await state.clear()
+    r = await get_redis()
+    raw = await r.get(redis_key)
+    if not raw:
         return
 
     try:
-        if isinstance(current, int):
-            new_value = int(value_str)
-        elif isinstance(current, float):
-            new_value = float(value_str)
-        else:
-            new_value = value_str
-        setattr(settings, param, new_value)
-        await message.answer(
-            f"✅ 参数 {param} 已更新为: {new_value}",
-            reply_markup=_admin_menu_kb(tg_id=message.from_user.id),
-        )
-    except (ValueError, TypeError):
-        await message.answer(f"无效的值，需要 {type(current).__name__} 类型，请重新输入:")
+        payload = json.loads(raw)
+        chat_id = int(payload.get("chat_id", 0))
+        message_id = int(payload.get("message_id", 0))
+    except Exception:
+        await r.delete(redis_key)
         return
 
-    await state.clear()
+    if chat_id > 0 and message_id > 0:
+        try:
+            await bot.unpin_chat_message(chat_id=chat_id, message_id=message_id)
+        except Exception:
+            pass
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except Exception:
+            pass
+    await r.delete(redis_key)
 
 
-@router.callback_query(F.data == "admin:settle", super_admin_only)
-async def cb_admin_settle(callback: types.CallbackQuery):
-    """手动触发结算（仅私聊发送结果，不在群组暴露）。"""
-    await callback.answer("正在执行结算...", show_alert=True)
-    from services.settlement_service import settle_all, format_daily_report
+@router.message(Command(CMD_MAINTAIN))
+async def cmd_maintain(message: types.Message):
+    """超管命令：进入停机维护，锁定所有命令/回调。"""
+    if not is_super_admin(message.from_user.id):
+        await message.answer("❌ 无权使用此命令")
+        return
+
+    from cache.redis_client import get_redis
+    import json
+
+    r = await get_redis()
+    if await r.exists(MAINTENANCE_MODE_KEY):
+        await message.answer("🔧 已处于停机维护中")
+        return
+
+    extra_desc = (message.text or "").split(maxsplit=1)
+    update_desc = extra_desc[1].strip() if len(extra_desc) > 1 else ""
+
+    await _unpin_and_delete_stored_notice(message.bot, MAINTENANCE_PIN_KEY)
+    await _unpin_and_delete_stored_notice(message.bot, COMPENSATION_PIN_KEY)
+
+    thread_id = message.message_thread_id
+    body_lines = [
+        "🔧【停机维护公告】",
+        "",
+        "系统正在维护中，暂时停止所有命令和按钮操作。",
+        "维护完成后将执行停机补偿（每人 +500 积分）。",
+    ]
+    if update_desc:
+        body_lines.extend(["", "📋 本次更新内容：", update_desc])
+
+    announce = await message.bot.send_message(
+        chat_id=message.chat.id,
+        text="\n".join(body_lines),
+        message_thread_id=thread_id,
+    )
+    try:
+        await message.bot.pin_chat_message(
+            chat_id=message.chat.id,
+            message_id=announce.message_id,
+            disable_notification=False,
+        )
+    except Exception:
+        pass
+
+    await r.set(
+        MAINTENANCE_PIN_KEY,
+        json.dumps(
+            {
+                "chat_id": message.chat.id,
+                "message_id": announce.message_id,
+                "thread_id": thread_id or 0,
+            },
+            ensure_ascii=False,
+        ),
+    )
+    await set_maintenance_mode(
+        {
+            "enabled_by": message.from_user.id,
+            "chat_id": message.chat.id,
+            "thread_id": thread_id or 0,
+            "started_at": dt.datetime.now(dt.UTC).isoformat(),
+            "update_desc": update_desc,
+        }
+    )
+    await message.answer("✅ 已开启停机维护模式")
+
+
+@router.message(Command(CMD_COMPENSATE))
+async def cmd_compensate(message: types.Message):
+    """超管命令：解除维护并发放停机补偿（每人 +500）。"""
+    if not is_super_admin(message.from_user.id):
+        await message.answer("❌ 无权使用此命令")
+        return
+
+    args = (message.text or "").split(maxsplit=1)
+    if len(args) < 2 or not args[1].strip():
+        await message.answer("用法: /cp_compensate <更新内容>")
+        return
+    update_desc = args[1].strip()
+
+    from cache.redis_client import get_redis
+    from sqlalchemy import func as sqlfunc, select, update
+    from db.models import User
+    import json
+
     async with async_session() as session:
         async with session.begin():
-            reports = await settle_all(session)
+            total_users = int((await session.execute(select(sqlfunc.count(User.id)))).scalar() or 0)
+            if total_users > 0:
+                await session.execute(
+                    update(User).values(traffic=User.traffic + MAINTENANCE_COMPENSATION_BONUS)
+                )
 
-    lines = [f"手动结算完成，处理了 {len(reports)} 家公司:"]
-    for company, report, events in reports:
-        lines.append(format_daily_report(company, report, events))
-        lines.append("")
+    await clear_maintenance_mode()
+    await _unpin_and_delete_stored_notice(message.bot, MAINTENANCE_PIN_KEY)
+    await _unpin_and_delete_stored_notice(message.bot, COMPENSATION_PIN_KEY)
 
-    text = "\n".join(lines)
-    if len(text) > 4000:
-        text = text[:4000] + "\n...(截断)"
+    thread_id = message.message_thread_id
+    body = (
+        "🎁【停机补偿公告】\n\n"
+        f"系统维护已完成，已向全体 {total_users} 名玩家发放 "
+        f"+{MAINTENANCE_COMPENSATION_BONUS} 积分补偿。\n\n"
+        "📋 本次更新内容：\n"
+        f"{update_desc}"
+    )
+    announce = await message.bot.send_message(
+        chat_id=message.chat.id,
+        text=body,
+        message_thread_id=thread_id,
+    )
+    try:
+        await message.bot.pin_chat_message(
+            chat_id=message.chat.id,
+            message_id=announce.message_id,
+            disable_notification=False,
+        )
+    except Exception:
+        pass
 
-    # 如果在群组触发，私聊发送结果，群内只提示
-    if callback.message.chat.type in ("group", "supergroup"):
-        try:
-            await callback.bot.send_message(
-                callback.from_user.id,
-                text,
-                reply_markup=_admin_menu_kb(tg_id=callback.from_user.id),
-            )
-            await callback.message.edit_text("✅ 结算完成，结果已私聊发送。")
-        except Exception:
-            await callback.message.edit_text("结算完成，但无法私聊发送结果，请先私聊bot一次。")
-    else:
-        await callback.message.edit_text(text, reply_markup=_admin_menu_kb(tg_id=callback.from_user.id))
+    r = await get_redis()
+    await r.set(
+        COMPENSATION_PIN_KEY,
+        json.dumps(
+            {
+                "chat_id": message.chat.id,
+                "message_id": announce.message_id,
+                "thread_id": thread_id or 0,
+            },
+            ensure_ascii=False,
+        ),
+    )
+    await message.answer(
+        f"✅ 停机补偿完成：{total_users} 人 × {MAINTENANCE_COMPENSATION_BONUS} 积分"
+    )
 
 
-@router.callback_query(F.data == "admin:logout", super_admin_only)
-async def cb_admin_logout(callback: types.CallbackQuery):
-    """退出管理员模式。"""
-    from handlers.common import revoke_admin
-    await revoke_admin(callback.from_user.id)
-    await callback.message.edit_text("已退出管理员模式。如需重新进入请使用 /company_admin <密钥>")
-    await callback.answer()
-
-
-@router.callback_query(F.data == "admin:close", super_admin_only)
-async def cb_admin_close(callback: types.CallbackQuery):
-    await callback.message.delete()
-    await callback.answer()
-
-
-# ---- /company_cleanup 清理过期数据 ----
+# ---- /cp_cleanup 清理过期数据 ----
 
 @router.message(Command(CMD_CLEANUP))
 async def cmd_cleanup(message: types.Message):

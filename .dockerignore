@@ -1,0 +1,6 @@
+postgres_data/
+redis_data/
+__pycache__/
+*.pyc
+my_company_backup_*.json.gz
+my_company.db

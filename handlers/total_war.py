@@ -83,7 +83,7 @@ async def on_total_war_mention(message: types.Message):
     async with async_session() as session:
         user = await get_user_by_tg_id(session, tg_id)
         if not user:
-            await message.reply("请先 /company_create 创建公司")
+            await message.reply("请先 /cp_create 创建公司")
             return
         companies = await get_companies_by_owner(session, user.id)
         if not companies:

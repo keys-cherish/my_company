@@ -20,15 +20,6 @@ def fmt_quota(amount: int) -> str:
     return fmt_currency(amount)
 
 
-def fmt_real_traffic(mb: int) -> str:
-    """Format real traffic in MB/GB/TB."""
-    if mb >= 1024 * 1024:
-        return f"{mb / 1024 / 1024:.1f}TB"
-    if mb >= 1024:
-        return f"{mb / 1024:.1f}GB"
-    return f"{mb}MB"
-
-
 def fmt_pct(value: float) -> str:
     """Format a 0-100 float as percentage string."""
     return f"{value:.2f}%"

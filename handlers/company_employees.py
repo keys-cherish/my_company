@@ -24,21 +24,21 @@ from utils.formatters import fmt_traffic
 router = Router()
 
 
-# ---- /company_member 命令：招聘/裁员 ----
+# ---- /cp_member 命令：招聘/裁员 ----
 
 @router.message(Command(CMD_MEMBER))
 async def cmd_member(message: types.Message):
-    """Handle /company_member add|minus <count>."""
+    """Handle /cp_member add|minus <count>."""
     tg_id = message.from_user.id
     args = (message.text or "").split()
 
     if len(args) < 3:
         await message.answer(
             "👷 员工管理:\n"
-            "  /company_member add <数量> — 招聘员工\n"
-            "  /company_member add max — 招满\n"
-            "  /company_member minus <数量> — 裁员\n"
-            "例: /company_member add 5"
+            "  /cp_member add <数量> — 招聘员工\n"
+            "  /cp_member add max — 招满\n"
+            "  /cp_member minus <数量> — 裁员\n"
+            "例: /cp_member add 5"
         )
         return
 
@@ -55,7 +55,7 @@ async def cmd_member(message: types.Message):
         async with session.begin():
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
-                await message.answer("请先 /company_create 创建公司")
+                await message.answer("请先 /cp_create 创建公司")
                 return
             companies = await get_companies_by_owner(session, user.id)
             if not companies:

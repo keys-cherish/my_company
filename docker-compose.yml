@@ -3,6 +3,11 @@ services:
     image: postgres:16-alpine
     container_name: my_company_postgres
     restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-mycompany}
       POSTGRES_USER: ${POSTGRES_USER:-mycompany}
@@ -13,10 +18,15 @@ services:
   redis:
     image: redis:alpine
     container_name: my_company_redis
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-mycompany_redis}
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-mycompany_redis} --maxmemory 64mb --maxmemory-policy allkeys-lru
     restart: always
     volumes:
       - ./redis_data:/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
 
   bot:
     build: .
@@ -26,7 +36,7 @@ services:
     environment:
       REDIS_URL: redis://:${REDIS_PASSWORD:-mycompany_redis}@redis:6379/0
     ports:
-      - "${WEBHOOK_PORT:-8080}:${WEBHOOK_PORT:-8080}"
+      - "127.0.0.1:${WEBHOOK_PORT:-8080}:${WEBHOOK_PORT:-8080}"
     volumes:
       - .:/app
     depends_on:

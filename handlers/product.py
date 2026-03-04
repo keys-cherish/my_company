@@ -9,9 +9,8 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from commands import CMD_CLEAR_PRODUCT, CMD_NEW_PRODUCT
+from commands import CMD_NEW_PRODUCT
 from db.engine import async_session
-from handlers.common import is_super_admin
 from keyboards.menus import tag_kb
 from services.company_service import get_company_by_id, get_companies_by_owner, update_daily_revenue
 from cache.redis_client import get_redis
@@ -27,7 +26,6 @@ from services.product_service import (
 from services.user_service import get_user_by_tg_id
 from utils.formatters import fmt_traffic
 from utils.panel_owner import mark_panel
-from db.models import Product as ProductModel
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -84,7 +82,7 @@ async def cmd_new_product(message: types.Message):
         async with session.begin():
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
-                await message.answer("请先 /company_create 创建公司")
+                await message.answer("请先 /cp_create 创建公司")
                 return
             companies = await get_companies_by_owner(session, user.id)
             if not companies:
@@ -201,7 +199,7 @@ async def cb_product_menu(callback: types.CallbackQuery):
     async with async_session() as session:
         user = await get_user_by_tg_id(session, tg_id)
         if not user:
-            await callback.answer("请先 /company_create 创建公司", show_alert=True)
+            await callback.answer("请先 /cp_create 创建公司", show_alert=True)
             return
         from services.company_service import get_companies_by_owner
         companies = await get_companies_by_owner(session, user.id)
@@ -236,7 +234,7 @@ async def cb_product_list(callback: types.CallbackQuery, company_id: int | None 
         user = await get_user_by_tg_id(session, tg_id)
         company = await get_company_by_id(session, company_id)
         if not user:
-            await callback.answer("请先 /company_create 创建公司", show_alert=True)
+            await callback.answer("请先 /cp_create 创建公司", show_alert=True)
             return
         if not company or company.owner_id != user.id:
             await callback.answer("无权操作", show_alert=True)
@@ -313,7 +311,7 @@ async def cb_create_product(callback: types.CallbackQuery):
         async with session.begin():
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
-                await callback.answer("请先 /company_create 创建公司", show_alert=True)
+                await callback.answer("请先 /cp_create 创建公司", show_alert=True)
                 return
             company = await get_company_by_id(session, company_id)
             if not company or company.owner_id != user.id:
@@ -342,7 +340,7 @@ async def cb_upgrade_product(callback: types.CallbackQuery):
         async with session.begin():
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
-                await callback.answer("请先 /company_create 创建公司", show_alert=True)
+                await callback.answer("请先 /cp_create 创建公司", show_alert=True)
                 return
             for i in range(count):
                 if i > 0:
@@ -389,7 +387,7 @@ async def cb_delete_product(callback: types.CallbackQuery):
         async with session.begin():
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
-                await callback.answer("请先 /company_create 创建公司", show_alert=True)
+                await callback.answer("请先 /cp_create 创建公司", show_alert=True)
                 return
             company = await get_company_by_id(session, company_id)
             if not company or company.owner_id != user.id:
@@ -406,47 +404,3 @@ async def cb_delete_product(callback: types.CallbackQuery):
 
     await callback.answer(f"产品「{name}」已下架", show_alert=True)
     await _refresh_product_list(callback, company_id)
-
-
-# ---- /company_clear 管理员命令（限定 tg_id） ----
-
-
-@router.message(Command(CMD_CLEAR_PRODUCT))
-async def cmd_clear_product(message: types.Message):
-    """管理员命令：回复某人消息，清除该用户所有产品。"""
-    if not is_super_admin(message.from_user.id):
-        await message.answer("❌ 无权使用此命令")
-        return
-
-    if not message.reply_to_message:
-        await message.answer("用法: 回复某人消息并发送 /company_clear")
-        return
-
-    target = message.reply_to_message.from_user
-    if not target:
-        await message.answer("❌ 无法获取目标用户")
-        return
-
-    from sqlalchemy import select, delete
-    async with async_session() as session:
-        async with session.begin():
-            user = await get_user_by_tg_id(session, target.id)
-            if not user:
-                await message.answer("❌ 该用户未注册")
-                return
-            companies = await get_companies_by_owner(session, user.id)
-            if not companies:
-                await message.answer("❌ 该用户没有公司")
-                return
-
-            total_deleted = 0
-            for company in companies:
-                result = await session.execute(
-                    delete(ProductModel).where(ProductModel.company_id == company.id)
-                )
-                total_deleted += result.rowcount
-                await update_daily_revenue(session, company.id)
-
-    await message.answer(
-        f"✅ 已清除 {target.full_name} 的所有产品 (共 {total_deleted} 个)"
-    )

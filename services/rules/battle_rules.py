@@ -75,7 +75,7 @@ async def check_attacker_registered(
             code="ATTACKER_NOT_REGISTERED",
             actual=None,
             expected="registered",
-            message="❌ 你还未注册，请先 /company_start",
+            message="❌ 你还未注册，请先 /cp_start",
         )
     return None
 

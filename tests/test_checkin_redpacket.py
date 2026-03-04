@@ -1,4 +1,4 @@
-"""打卡、红包、流量兑换功能测试。"""
+"""打卡与红包功能测试。"""
 
 from __future__ import annotations
 
@@ -163,21 +163,3 @@ class TestRedpacketCreation(unittest.IsolatedAsyncioTestCase):
         max_amt = max(r[1] for r in results)
         self.assertEqual(king[1], max_amt)
 
-
-class TestTrafficExchangeConfig(unittest.TestCase):
-    """流量兑换配置测试。"""
-
-    def test_traffic_rate_in_config(self):
-        from config import settings
-        # 100积分 = 1MB
-        self.assertEqual(settings.traffic_exchange_rate, 100)
-
-    def test_traffic_api_url_default_empty(self):
-        from config import settings
-        self.assertEqual(settings.traffic_exchange_api_url, "")
-
-    def test_daily_limit_positive(self):
-        from config import settings
-        # 每日上限 5TB = 5,000,000 MB
-        self.assertGreater(settings.traffic_exchange_daily_limit_mb, 0)
-        self.assertEqual(settings.traffic_exchange_daily_limit_mb, 5_000_000)

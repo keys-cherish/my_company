@@ -33,11 +33,11 @@ def _parse_amount(text: str) -> int | None:
     return amount
 
 
-# ---- /company_log 查询流水 ----
+# ---- /cp_log 查询流水 ----
 
 @router.message(Command(CMD_LOG))
 async def cmd_log(message: types.Message):
-    """查询资金流水：/company_log [user|company]"""
+    """查询资金流水：/cp_log [user|company]"""
     tg_id = message.from_user.id
     args = (message.text or "").split()
     log_type = args[1].lower() if len(args) > 1 else "all"
@@ -45,7 +45,7 @@ async def cmd_log(message: types.Message):
     async with async_session() as session:
         user = await get_user_by_tg_id(session, tg_id)
         if not user:
-            await message.answer("请先 /company_start 注册账号")
+            await message.answer("请先 /cp_start 注册账号")
             return
 
         companies = await get_companies_by_owner(session, user.id)
@@ -75,15 +75,15 @@ async def cmd_log(message: types.Message):
     elif log_type in ("company", "公司") and not company:
         lines.append("\n🏢 你还没有公司")
 
-    lines.append(f"\n💡 用法: /company_log [user|company]")
+    lines.append(f"\n💡 用法: /cp_log [user|company]")
     await message.answer("\n".join(lines))
 
 
-# ---- /company_transfer 转账 ----
+# ---- /cp_transfer 转账 ----
 
 @router.message(Command(CMD_TRANSFER))
 async def cmd_transfer(message: types.Message):
-    """转账命令：/company_transfer <金额>
+    """转账命令：/cp_transfer <金额>
 
     回复目标用户的消息，发送此命令进行转账。
     """
@@ -94,8 +94,8 @@ async def cmd_transfer(message: types.Message):
         await message.answer(
             f"💸 转账命令用法:\n"
             f"回复目标用户的消息，发送:\n"
-            f"/company_transfer <金额>\n\n"
-            f"示例: /company_transfer 1000\n\n"
+            f"/cp_transfer <金额>\n\n"
+            f"示例: /cp_transfer 1000\n\n"
             f"⚠️ 转账税率: {int(TRANSFER_TAX_RATE * 100)}%\n"
             f"从你的个人余额转给对方（税后到账）"
         )
@@ -131,7 +131,7 @@ async def cmd_transfer(message: types.Message):
         async with session.begin():
             sender = await get_user_by_tg_id(session, tg_id)
             if not sender:
-                await message.answer("请先 /company_start 注册账号")
+                await message.answer("请先 /cp_start 注册账号")
                 return
 
             if sender.traffic < amount:
