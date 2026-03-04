@@ -86,6 +86,8 @@ def _register_routers(dp: Dispatcher):
         if current_state is not None:
             return
         allowed_prefixes = (
+            "/block",
+            "/unblock",
             "/company",
             "/company_list",
             "/company_member",
@@ -163,11 +165,18 @@ async def main():
 
     # 启动模式：polling / webhook
     runner: web.AppRunner | None = None
-    try:
-        if settings.run_mode.lower() == "webhook":
-            if not settings.webhook_base_url:
-                raise RuntimeError("WEBHOOK_BASE_URL 未配置，无法启动 webhook 模式")
+    configured_mode = (settings.run_mode or "polling").strip().lower()
+    if configured_mode not in {"polling", "webhook"}:
+        logger.warning("未知 RUN_MODE=%s，已回退到 polling", settings.run_mode)
+        configured_mode = "polling"
 
+    effective_mode = configured_mode
+    if configured_mode == "webhook" and not settings.webhook_base_url:
+        logger.warning("WEBHOOK_BASE_URL 未配置，已自动回退到 polling 模式")
+        effective_mode = "polling"
+
+    try:
+        if effective_mode == "webhook":
             webhook_url = f"{settings.webhook_base_url.rstrip('/')}{settings.webhook_path}"
             await bot.set_webhook(
                 url=webhook_url,
@@ -200,7 +209,7 @@ async def main():
             logger.info("机器人启动中（polling）...")
             await dp.start_polling(bot)
     finally:
-        if settings.run_mode.lower() == "webhook":
+        if effective_mode == "webhook":
             try:
                 await bot.delete_webhook(drop_pending_updates=False)
             except Exception:

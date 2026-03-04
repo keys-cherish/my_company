@@ -29,6 +29,8 @@ from services.company_service import (
 )
 from services.cooperation_service import get_cooperation_bonus
 from services.operations_service import (
+    INSURANCE_LEVELS,
+    LEGAL_WORK_HOURS,
     bar10,
     calc_immoral_buff,
     calc_extra_operating_costs,
@@ -147,6 +149,35 @@ async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, Inlin
     now_utc = dt.datetime.now(dt.UTC)
     market = get_market_trend(company, now_utc)
     multipliers = get_operation_multipliers(profile, now_utc)
+    work_info = multipliers["work"]
+    office_info = multipliers["office"]
+    training_info = multipliers["training"]
+    insurance_info = INSURANCE_LEVELS.get(profile.insurance_level, INSURANCE_LEVELS["basic"])
+    culture_income_rate = multipliers["culture_bonus_mult"] - 1.0
+    culture_risk_reduce_rate = (profile.culture / 100) * 0.30
+    if profile.work_hours > LEGAL_WORK_HOURS:
+        reg_daily_delta = (profile.work_hours - LEGAL_WORK_HOURS) * 4
+    else:
+        reg_daily_delta = -(2 + (1 if profile.work_hours <= 6 else 0))
+
+    if training_info["active"]:
+        train_status = "生效中"
+        train_mult = f"×{training_info['income_mult']:.2f}"
+        expires_at = training_info.get("expires_at")
+        if expires_at:
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=dt.UTC)
+            remain = max(0, int((expires_at - now_utc).total_seconds()))
+            train_tail = f" | 剩余 {fmt_duration(remain)}"
+    elif profile.training_level != "none" and profile.training_expires_at:
+        train_status = "已过期"
+        train_mult = "×1.00"
+        train_tail = ""
+    else:
+        train_status = "无"
+        train_mult = "×1.00"
+        train_tail = ""
+
     product_income = int(company.daily_revenue * multipliers["income_mult"] * market["income_mult"])
     if battle_debuff_rate > 0:
         product_income = max(0, int(product_income * (1.0 - battle_debuff_rate)))
@@ -267,6 +298,12 @@ async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, Inlin
         f"👥 员工：{company.employee_count}/{max_employees}\n"
         f"💰 积分余额：{fmt_quota(company.total_funds)}\n"
         f"😐 道德：{profile.ethics} [{bar10(profile.ethics, -100, 100)}] {ethics_rating(profile.ethics)}\n"
+        f"⏰ 工时：{profile.work_hours}h {work_info['label']} | 营收×{work_info['income_mult']:.2f} | 成本×{work_info['cost_mult']:.2f} | 道德{work_info['ethics_delta']:+d}/日\n"
+        f"🏢 办公：{office_info['name']} | 营收×{office_info['income_mult']:.2f} | 办公开销 {office_info['employee_cost']}/人/日\n"
+        f"🏅 培训：{training_info['name']}（{train_status}）| 营收{train_mult}{train_tail}\n"
+        f"👑 保险：{insurance_info['name']} | 罚款减免 {int(insurance_info['fine_reduction'] * 100)}% | 费率 {insurance_info['cost_rate'] * 100:.1f}%\n"
+        f"🎭 文化：{profile.culture}/100 [{bar10(profile.culture)}] | 营收+{culture_income_rate*100:.1f}% | 风险-{culture_risk_reduce_rate*100:.1f}%\n"
+        f"🛂 监管：{profile.regulation_pressure}/100 [{bar10(profile.regulation_pressure)}] | 每日变化 {reg_daily_delta:+d}\n"
         f"\n"
         f"📈 预估日营收：{fmt_quota(estimated_income)}\n"
         f"  产品收入：{fmt_quota(product_income)} | 地产收入：{fmt_quota(estate_income)}\n"
@@ -326,12 +363,17 @@ async def render_company_finance_detail(company_id: int, tg_id: int) -> tuple[st
 
         latest_report = (
             await session.execute(
-                select(DailyReport)
+                select(
+                    DailyReport.date,
+                    DailyReport.total_income,
+                    DailyReport.operating_cost,
+                    DailyReport.dividend_paid,
+                )
                 .where(DailyReport.company_id == company_id)
                 .order_by(DailyReport.id.desc())
                 .limit(1)
             )
-        ).scalars().first()
+        ).mappings().first()
 
     # Estimated income (same core formula as settlement, excluding one-shot random events).
     now_utc = dt.datetime.now(dt.UTC)
@@ -435,15 +477,15 @@ async def render_company_finance_detail(company_id: int, tg_id: int) -> tuple[st
     ])
 
     if latest_report:
-        latest_profit = latest_report.total_income - latest_report.operating_cost
+        latest_profit = latest_report["total_income"] - latest_report["operating_cost"]
         lines += [
             "",
             "【最近一次结算】",
-            f"日期: {latest_report.date}",
-            f"总收入: {fmt_traffic(latest_report.total_income)}",
-            f"总成本: -{fmt_traffic(latest_report.operating_cost)}",
+            f"日期: {latest_report['date']}",
+            f"总收入: {fmt_traffic(latest_report['total_income'])}",
+            f"总成本: -{fmt_traffic(latest_report['operating_cost'])}",
             f"净利润: {'+' if latest_profit >= 0 else ''}{fmt_traffic(latest_profit)}",
-            f"分红支出: -{fmt_traffic(latest_report.dividend_paid)}",
+            f"分红支出: -{fmt_traffic(latest_report['dividend_paid'])}",
         ]
     else:
         lines += [

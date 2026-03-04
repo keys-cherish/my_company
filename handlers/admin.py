@@ -54,8 +54,6 @@ async def cb_buff_list(callback: types.CallbackQuery):
         from db.models import User
         from services.cooperation_service import get_cooperation_bonus
         from services.operations_service import (
-            INSURANCE_LEVELS,
-            LEGAL_WORK_HOURS,
             bar10,
             calc_immoral_buff,
             ethics_rating,
@@ -74,10 +72,6 @@ async def cb_buff_list(callback: types.CallbackQuery):
 
     now_utc = dt.datetime.now(dt.UTC)
     multipliers = get_operation_multipliers(profile, now_utc)
-    work_info = multipliers["work"]
-    office_info = multipliers["office"]
-    training_info = multipliers["training"]
-    insurance_info = INSURANCE_LEVELS.get(profile.insurance_level, INSURANCE_LEVELS["basic"])
 
     rep_mult = reputation_buff_multiplier(rep)
     rep_buff_rate = rep_mult - 1.0
@@ -95,8 +89,6 @@ async def cb_buff_list(callback: types.CallbackQuery):
     type_research_rate = type_info.get("research_speed_bonus", 0.0) if type_info else 0.0
     type_cost_rate = type_info.get("cost_bonus", 0.0) if type_info else 0.0
 
-    culture_income_rate = multipliers["culture_bonus_mult"] - 1.0
-    culture_risk_reduce_rate = (profile.culture / 100) * 0.30
     immoral_mult = calc_immoral_buff(profile.ethics)
     immoral_buff_rate = (immoral_mult - 1.0) if immoral_mult > 1.0 else 0.0
 
@@ -147,22 +139,6 @@ async def cb_buff_list(callback: types.CallbackQuery):
             return f"（剩余 {fmt_duration(ttl)}）"
         return ""
 
-    train_status = "未生效"
-    train_tail = ""
-    if training_info["active"]:
-        train_status = "生效中"
-        expires_at = training_info.get("expires_at")
-        if expires_at:
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=dt.UTC)
-            remain = max(0, int((expires_at - now_utc).total_seconds()))
-            train_tail = f" | 剩余 {fmt_duration(remain)}"
-
-    if profile.work_hours > LEGAL_WORK_HOURS:
-        reg_daily_delta = (profile.work_hours - LEGAL_WORK_HOURS) * 4
-    else:
-        reg_daily_delta = -(2 + (1 if profile.work_hours <= 6 else 0))
-
     lines = [
         f"📋 {company.name} — Buff一览",
         "─" * 24,
@@ -170,23 +146,13 @@ async def cb_buff_list(callback: types.CallbackQuery):
         f"净影响 {'+' if buff_net_rate >= 0 else '-'}{abs(buff_net_rate)*100:.0f}%（{active_effect_count}项）",
         "",
         "【⚙️ 经营策略系】",
-        f"⏰ 工时：{profile.work_hours}h {work_info['label']} | 营收×{work_info['income_mult']:.2f} | "
-        f"成本×{work_info['cost_mult']:.2f} | 道德{work_info['ethics_delta']:+d}/日",
-        f"🏢 办公：{office_info['name']} | 营收×{office_info['income_mult']:.2f} | "
-        f"办公开销 {office_info['employee_cost']}/人/日",
-        f"🏅 培训：{training_info['name']}（{train_status}）| 营收×{training_info['income_mult']:.2f}{train_tail}",
-        f"👑 保险：{insurance_info['name']} | 罚款减免 {int(insurance_info['fine_reduction'] * 100)}% | "
-        f"费率 {insurance_info['cost_rate'] * 100:.1f}%",
-        f"🎭 文化：{profile.culture}/100 [{bar10(profile.culture)}] | "
-        f"营收+{culture_income_rate*100:.1f}% | 风险-{culture_risk_reduce_rate*100:.1f}%",
+        "工时/办公/培训/保险/文化/监管已移动到「我的公司」主页面。",
         f"😐 道德：{profile.ethics} [{bar10(profile.ethics, -100, 100)}] {ethics_rating(profile.ethics)}",
         (
             f"😈 缺德Buff：道德<20触发，当前 +{immoral_buff_rate*100:.1f}%"
             if immoral_buff_rate > 0
             else "😈 缺德Buff：未触发（需道德<20）"
         ),
-        f"🛂 监管：{profile.regulation_pressure}/100 [{bar10(profile.regulation_pressure)}] | 每日变化 {reg_daily_delta:+d}",
-        "   规则：工时>8h 每超1h监管+4；≤8h 监管-2（6h额外-1）",
         "",
         "【🌐 外部增益】",
         f"⭐ 声望：{rep}（评级 {reputation_rating(rep)}） | 营收+{rep_buff_rate*100:.1f}%",

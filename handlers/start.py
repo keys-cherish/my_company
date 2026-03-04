@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from aiogram import F, Router, types
 from aiogram.filters import Command
-from aiogram.types import BotCommand
+from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeChatMember
 
 from cache.redis_client import get_leaderboard
 from commands import (
     CMD_ADMIN,
     CMD_BATTLE,
+    CMD_BLOCK,
     CMD_COOPERATE,
     CMD_COMPANY,
     CMD_CREATE_COMPANY,
@@ -22,6 +23,7 @@ from commands import (
     CMD_NEW_PRODUCT,
     CMD_QUEST,
     CMD_RANK_COMPANY,
+    CMD_UNBLOCK,
     CMD_START,
     CMD_WELFARE,
     CMD_CHECKIN,
@@ -56,6 +58,8 @@ BOT_COMMANDS = [
     BotCommand(command="cp_slot", description="🎰 老虎机（每日奖励一次）"),
     BotCommand(command=CMD_CHECKIN, description="🏢 每日打卡（连续签到领奖励）"),
     BotCommand(command=CMD_REDPACKET, description="🧧 发红包（金额 个数）"),
+    BotCommand(command=CMD_BLOCK, description="隐藏本聊天命令菜单"),
+    BotCommand(command=CMD_UNBLOCK, description="恢复本聊天命令菜单"),
 ]
 
 HELP_TEXT = (
@@ -83,6 +87,8 @@ HELP_TEXT = (
     "/company_help — 显示此帮助\n"
     "\n🎰 /cp_slot — 老虎机（三个一样中奖，777大奖77777！每日奖励一次）\n"    "\n🏢 /company_checkin — 每日打卡（连续签到7天开宝箱！）\n"
     "🧧 /company_redpacket <金额> <个数> — 发公司红包，群里抢！\n"
+    "🙈 /block — 隐藏当前聊天命令菜单（输入 / 不再弹机器人命令）\n"
+    "🙉 /unblock — 恢复当前聊天命令菜单\n"
     "\n📶 积分兑换流量：交易所→积分→流量\n"    "\n🤖 AI对话: 任意消息带 @机器人用户名 即可调用\n"
     "普通用户每分钟最多 10 次，管理员/超管不限制\n"
 )
@@ -118,6 +124,28 @@ async def cmd_start(message: types.Message):
 @router.message(Command(CMD_HELP))
 async def cmd_help(message: types.Message):
     await message.answer(HELP_TEXT)
+
+
+def _member_scope_for_message(message: types.Message):
+    if message.chat.type == "private":
+        return BotCommandScopeChat(chat_id=message.chat.id)
+    return BotCommandScopeChatMember(chat_id=message.chat.id, user_id=message.from_user.id)
+
+
+@router.message(Command(CMD_BLOCK))
+async def cmd_block(message: types.Message):
+    """Hide this bot's command menu for current user in current chat."""
+    scope = _member_scope_for_message(message)
+    await message.bot.set_my_commands([], scope=scope)
+    await message.answer("🙈 已隐藏当前聊天的机器人命令菜单。\n恢复请发送 /unblock")
+
+
+@router.message(Command(CMD_UNBLOCK))
+async def cmd_unblock(message: types.Message):
+    """Restore default command menu for current user in current chat."""
+    scope = _member_scope_for_message(message)
+    await message.bot.delete_my_commands(scope=scope)
+    await message.answer("🙉 已恢复当前聊天的机器人命令菜单。")
 
 
 @router.callback_query(F.data == "menu:main")

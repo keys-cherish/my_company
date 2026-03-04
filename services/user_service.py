@@ -84,6 +84,32 @@ async def add_reputation(session: AsyncSession, user_id: int, amount: int) -> bo
     return True
 
 
+async def get_traffic_by_tg_id(tg_id: int) -> int:
+    """Get user's personal balance (traffic) by Telegram ID."""
+    from db.engine import async_session
+
+    async with async_session() as session:
+        user = await get_user_by_tg_id(session, tg_id)
+        return int(user.traffic) if user else 0
+
+
+async def add_traffic_by_tg_id(
+    tg_id: int,
+    amount: int,
+    *,
+    reason: str = "unknown",
+) -> bool:
+    """Add/subtract personal balance (traffic) by Telegram ID."""
+    from db.engine import async_session
+
+    async with async_session() as session:
+        async with session.begin():
+            user = await get_user_by_tg_id(session, tg_id)
+            if user is None:
+                return False
+            return await add_traffic(session, user.id, amount, reason=reason)
+
+
 # ---------- Points (积分奖励系统，用于打卡等活动) ----------
 
 async def get_points(tg_id: int) -> int:
