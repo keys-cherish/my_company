@@ -52,7 +52,7 @@ services:
   api:
     build: .
     container_name: my_company_api
-    command: uv run mycompany-api
+    command: uv run python -m api
     env_file:
       - .env
     environment:
