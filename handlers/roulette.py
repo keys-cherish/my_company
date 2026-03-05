@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from html import escape as html_escape
 
 from aiogram import F, Router, types
+from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from commands import CMD_DEMON
 from keyboards.menus import tag_kb
 from services.roulette_service import (
     DEVIL_TG_ID,
@@ -41,6 +44,21 @@ DEVIL_STEP_DELAY = 1.5  # seconds between devil actions
 ROUND_MSG_DELAY = 0.8   # seconds between round transition lines
 
 
+def _parse_demon_bet_arg(text: str | None) -> tuple[bool, int]:
+    """Parse optional /cp_demon amount argument."""
+    if not text:
+        return True, 0
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) <= 1:
+        return True, 0
+    raw = parts[1].strip().replace(",", "").replace("_", "")
+    if not raw:
+        return True, 0
+    if not raw.isdigit():
+        return False, 0
+    return True, int(raw)
+
+
 async def _animate_pending(callback: types.CallbackQuery, room_id: str, tg_id: int):
     """Animate pending display messages (round start, item distribution) line by line."""
     for _ in range(20):  # safety limit
@@ -53,7 +71,7 @@ async def _animate_pending(callback: types.CallbackQuery, room_id: str, tg_id: i
         text = render_game_panel(state, tg_id)
         kb = _game_kb(state, tg_id)
         try:
-            await callback.message.edit_text(text, reply_markup=kb)
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         except Exception:
             pass
 
@@ -153,6 +171,8 @@ def _game_kb(state, viewer_tg_id: int) -> InlineKeyboardMarkup:
         counts: dict[str, int] = {}
         for item in items:
             counts[item] = counts.get(item, 0) + 1
+
+        phone_count = counts.pop("phone", 0)
         for item_key, count in counts.items():
             label = ITEM_NAME.get(item_key, item_key)
             if count > 1:
@@ -163,7 +183,33 @@ def _game_kb(state, viewer_tg_id: int) -> InlineKeyboardMarkup:
                     callback_data=f"roulette:use:{state.room_id}:{item_key}",
                 )
             )
-        rows.append(item_row)
+        if item_row:
+            rows.append(item_row)
+
+        if phone_count > 0:
+            remaining_shells = max(0, len(state.shells) - state.shell_index)
+            if remaining_shells > 0:
+                phone_buttons = [
+                    InlineKeyboardButton(
+                        text=f"手机看第{i}发",
+                        callback_data=f"roulette:use:{state.room_id}:phone:{i}",
+                    )
+                    for i in range(1, remaining_shells + 1)
+                ]
+                for i in range(0, len(phone_buttons), 3):
+                    rows.append(phone_buttons[i:i + 3])
+            else:
+                label = ITEM_NAME.get("phone", "一次性手机")
+                if phone_count > 1:
+                    label = f"{label}x{phone_count}"
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text=label,
+                            callback_data=f"roulette:use:{state.room_id}:phone",
+                        )
+                    ]
+                )
 
     rows.append([InlineKeyboardButton(text="放弃(-50%)", callback_data=f"roulette:cancel:{state.room_id}")])
     rows.append([InlineKeyboardButton(text="刷新", callback_data=f"roulette:refresh:{state.room_id}")])
@@ -182,10 +228,10 @@ async def _animate_devil_turn(callback: types.CallbackQuery, room_id: str, tg_id
         # Update panel after each devil action
         text = render_game_panel(state, tg_id)
         if state.phase == "finished":
-            text += "\n\n" + await _settle_game(state)
+            text += "\n\n" + html_escape(await _settle_game(state), quote=False)
         kb = _game_kb(state, tg_id)
         try:
-            await callback.message.edit_text(text, reply_markup=kb)
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         except Exception:
             pass
 
@@ -197,20 +243,77 @@ async def _animate_devil_turn(callback: types.CallbackQuery, room_id: str, tg_id
     if state and state.pending_display:
         await _animate_pending(callback, room_id, tg_id)
 
-    # After devil is done, if game continues and it's a human's turn, notify
-    state = await get_game_state(room_id)
-    if state and state.phase == "playing":
-        next_tid = _current_turn_tg_id(state)
-        next_p = _get_player(state, next_tid)
-        if next_p and not next_p.get("is_devil") and next_tid != tg_id:
-            try:
-                await callback.message.answer(
-                    f"魔鬼行动完毕，轮到 "
-                    f"<a href='tg://user?id={next_tid}'>{next_p['name']}</a>",
-                    parse_mode="HTML",
-                )
-            except Exception:
-                pass
+
+@router.message(Command(CMD_DEMON))
+async def cmd_cp_demon(message: types.Message):
+    tg_id = message.from_user.id
+    ok_arg, bet = _parse_demon_bet_arg(message.text)
+    if not ok_arg:
+        await message.answer("❌ 用法: /cp_demon [金额]\n例如: /cp_demon 5000")
+        return
+
+    from db.engine import async_session
+    from services.company_service import get_companies_by_owner
+    from services.user_service import get_user_by_tg_id
+
+    async with async_session() as session:
+        user = await get_user_by_tg_id(session, tg_id)
+        if not user:
+            await message.answer("请先 /company_start 注册")
+            return
+        companies = await get_companies_by_owner(session, user.id)
+        if not companies:
+            await message.answer("你还没有公司，请先 /company_create")
+            return
+        company = companies[0]
+
+    existing_room = await get_player_room(tg_id)
+    if existing_room:
+        state = await get_game_state(existing_room)
+        if state:
+            text = render_game_panel(state, tg_id)
+            kb = _game_kb(state, tg_id)
+            sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
+            await mark_panel(sent.chat.id, sent.message_id, tg_id)
+            return
+
+    if bet <= 0:
+        pts = await get_traffic_by_tg_id(tg_id)
+        text = (
+            f"😈 恶魔轮盘赌\n{'━' * 20}\n"
+            f"💎 可下注余额: {pts:,}\n"
+            f"选择赌注（最低 {MIN_BET:,} 积分）："
+        )
+        sent = await message.answer(text, reply_markup=_bet_kb(company.id, tg_id))
+        await mark_panel(sent.chat.id, sent.message_id, tg_id)
+        return
+
+    deducted = await consume_points(tg_id, bet)
+    if not deducted:
+        pts = await get_traffic_by_tg_id(tg_id)
+        if pts < bet:
+            await message.answer(f"❌ 积分不足 (当前 {pts:,}，需要 {bet:,})")
+        else:
+            await message.answer("❌ 操作繁忙，请重试")
+        return
+
+    room_id = str(tg_id)
+    ok, msg, state = await create_room(
+        room_id=room_id,
+        creator_tg_id=tg_id,
+        creator_company_id=company.id,
+        creator_name=company.name,
+        bet=bet,
+    )
+    if not ok:
+        await add_traffic_by_tg_id(tg_id, bet, reason="roulette_create_failed_refund")
+        await message.answer(msg)
+        return
+
+    text = render_game_panel(state, tg_id)
+    kb = _waiting_kb(room_id, tg_id)
+    sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await mark_panel(sent.chat.id, sent.message_id, tg_id)
 
 
 @router.callback_query(F.data.startswith("roulette:start:"))
@@ -226,9 +329,9 @@ async def cb_roulette_start(callback: types.CallbackQuery):
             text = render_game_panel(state, tg_id)
             kb = _game_kb(state, tg_id)
             try:
-                await callback.message.edit_text(text, reply_markup=kb)
+                await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
             except Exception:
-                sent = await callback.message.answer(text, reply_markup=kb)
+                sent = await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
                 await mark_panel(sent.chat.id, sent.message_id, tg_id)
             await callback.answer()
             return
@@ -298,9 +401,9 @@ async def cb_roulette_create(callback: types.CallbackQuery):
     text = render_game_panel(state, tg_id)
     kb = _waiting_kb(room_id, tg_id)
     try:
-        await callback.message.edit_text(text, reply_markup=kb)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
-        sent = await callback.message.answer(text, reply_markup=kb)
+        sent = await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
         await mark_panel(sent.chat.id, sent.message_id, tg_id)
     await callback.answer()
 
@@ -354,9 +457,9 @@ async def cb_roulette_join(callback: types.CallbackQuery):
     text = render_game_panel(state, tg_id)
     kb = _waiting_kb(room_id, state.creator_tg_id)
     try:
-        await callback.message.edit_text(text, reply_markup=kb)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
-        sent = await callback.message.answer(text, reply_markup=kb)
+        sent = await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
         await mark_panel(sent.chat.id, sent.message_id, tg_id)
     await callback.answer(msg)
 
@@ -374,9 +477,9 @@ async def cb_roulette_begin(callback: types.CallbackQuery):
     text = render_game_panel(state, tg_id)
     kb = _game_kb(state, tg_id)
     try:
-        await callback.message.edit_text(text, reply_markup=kb)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
-        sent = await callback.message.answer(text, reply_markup=kb)
+        sent = await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
         await mark_panel(sent.chat.id, sent.message_id, tg_id)
     await callback.answer("游戏开始!")
 
@@ -398,9 +501,9 @@ async def cb_roulette_solo(callback: types.CallbackQuery):
     text = render_game_panel(state, tg_id)
     kb = _game_kb(state, tg_id)
     try:
-        await callback.message.edit_text(text, reply_markup=kb)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
-        sent = await callback.message.answer(text, reply_markup=kb)
+        sent = await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
         await mark_panel(sent.chat.id, sent.message_id, tg_id)
     await callback.answer("单挑模式开始!")
 
@@ -423,12 +526,12 @@ async def cb_roulette_shoot(callback: types.CallbackQuery):
 
     text = render_game_panel(state, tg_id)
     if state and state.phase == "finished" and msg:
-        text += f"\n\n{msg}"  # msg is settlement text only
+        text += "\n\n" + html_escape(msg, quote=False)  # msg is settlement text only
     kb = _game_kb(state, tg_id)
     try:
-        await callback.message.edit_text(text, reply_markup=kb)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
-        sent = await callback.message.answer(text, reply_markup=kb)
+        sent = await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
         await mark_panel(sent.chat.id, sent.message_id, tg_id)
     await callback.answer()
 
@@ -441,20 +544,6 @@ async def cb_roulette_shoot(callback: types.CallbackQuery):
     state = await get_game_state(room_id)
     if state and state.phase == "playing" and _current_turn_tg_id(state) == DEVIL_TG_ID:
         await _animate_devil_turn(callback, room_id, tg_id)
-    elif state and state.phase == "playing":
-        # Notify next human player
-        next_tid = _current_turn_tg_id(state)
-        next_p = _get_player(state, next_tid)
-        if next_p and not next_p.get("is_devil") and next_tid != tg_id:
-            try:
-                shooter_name = callback.from_user.first_name or "?"
-                await callback.message.answer(
-                    f"{shooter_name} 已行动，轮到 "
-                    f"<a href='tg://user?id={next_tid}'>{next_p['name']}</a>",
-                    parse_mode="HTML",
-                )
-            except Exception:
-                pass
 
 
 @router.callback_query(F.data.startswith("roulette:use:"))
@@ -462,21 +551,32 @@ async def cb_roulette_use_item(callback: types.CallbackQuery):
     parts = callback.data.split(":")
     room_id = parts[2]
     item_key = parts[3]
+    item_arg = 0
+    if len(parts) >= 5:
+        try:
+            item_arg = int(parts[4])
+        except (TypeError, ValueError):
+            item_arg = 0
     tg_id = callback.from_user.id
 
-    ok, msg, state = await player_use_item(room_id=room_id, tg_id=tg_id, item_key=item_key)
+    ok, msg, state = await player_use_item(
+        room_id=room_id,
+        tg_id=tg_id,
+        item_key=item_key,
+        target_tg_id=item_arg,
+    )
     if not ok:
         await callback.answer(msg, show_alert=True)
         return
 
     text = render_game_panel(state, tg_id)
     if state and state.phase == "finished" and msg:
-        text += f"\n\n{msg}"
+        text += "\n\n" + html_escape(msg, quote=False)
     kb = _game_kb(state, tg_id)
     try:
-        await callback.message.edit_text(text, reply_markup=kb)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
-        sent = await callback.message.answer(text, reply_markup=kb)
+        sent = await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
         await mark_panel(sent.chat.id, sent.message_id, tg_id)
 
     # Show magnifier result as popup
@@ -512,7 +612,7 @@ async def cb_roulette_leave(callback: types.CallbackQuery):
         text = render_game_panel(state, state.creator_tg_id)
         kb = _waiting_kb(room_id, state.creator_tg_id)
         try:
-            await callback.message.edit_text(text, reply_markup=kb)
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         except Exception:
             pass
     await callback.answer(msg)
@@ -545,7 +645,7 @@ async def cb_roulette_refresh(callback: types.CallbackQuery):
     kb = _waiting_kb(room_id, state.creator_tg_id) if state.phase == "waiting" else _game_kb(state, tg_id)
 
     try:
-        await callback.message.edit_text(text, reply_markup=kb)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
         pass
     await callback.answer()

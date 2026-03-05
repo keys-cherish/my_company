@@ -15,6 +15,7 @@ import json
 import logging
 import random
 from dataclasses import asdict, dataclass, field
+from html import escape as html_escape
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +31,23 @@ MIN_BET = settings.roulette_min_bet
 MAX_BET_PCT = settings.roulette_max_bet_pct
 
 DEVIL_TG_ID = -1  # Sentinel for devil AI
+
+
+def _escape_text(value: object) -> str:
+    """Escape user-controlled text for Telegram HTML parse mode."""
+    return html_escape(str(value), quote=False)
+
+
+def _format_player_name(player: dict, *, mention: bool = False) -> str:
+    """Render player name with optional inline mention link."""
+    if player.get("is_devil"):
+        return "魔鬼"
+    safe_name = _escape_text(player.get("name", "?"))
+    if mention:
+        tg_id = int(player.get("tg_id", 0) or 0)
+        if tg_id > 0:
+            return f"<a href='tg://user?id={tg_id}'>{safe_name}</a>"
+    return safe_name
 
 
 async def consume_points(tg_id: int, amount: int) -> bool:
@@ -51,7 +69,8 @@ ROUND_CONFIG = [
     {"hp": 4, "shells": 8, "live_min": 3, "live_max": 5, "items": 3},
 ]
 
-ITEM_KEYS = ["magnifier", "cigarette", "saw", "beer", "pill", "handcuffs"]
+BASE_ITEM_KEYS = ["magnifier", "cigarette", "saw", "beer", "pill", "handcuffs"]
+LATE_ROUND_ITEM_KEYS = ["adrenaline", "inverter", "phone"]
 ITEM_EMOJI = {
     "magnifier": "🔍放大镜",
     "cigarette": "🚬香烟",
@@ -59,6 +78,9 @@ ITEM_EMOJI = {
     "beer": "🍺啤酒",
     "pill": "💊药丸",
     "handcuffs": "⛓️手铐",
+    "adrenaline": "💉肾上腺素",
+    "inverter": "🔄逆转器",
+    "phone": "📱一次性手机",
 }
 ITEM_SHORT = {
     "magnifier": "🔍",
@@ -67,6 +89,9 @@ ITEM_SHORT = {
     "beer": "🍺",
     "pill": "💊",
     "handcuffs": "⛓️",
+    "adrenaline": "💉",
+    "inverter": "🔄",
+    "phone": "📱",
 }
 # Text-only item names for readable UI
 ITEM_NAME = {
@@ -76,7 +101,20 @@ ITEM_NAME = {
     "beer": "啤酒",
     "pill": "药丸",
     "handcuffs": "手铐",
+    "adrenaline": "肾上腺素",
+    "inverter": "逆转器",
+    "phone": "一次性手机",
 }
+
+
+def _item_pool_for_round(round_index: int) -> list[str]:
+    """Round-specific item pool.
+
+    New items (adrenaline/inverter/phone) appear from round 3 onward.
+    """
+    if round_index >= 2:
+        return [*BASE_ITEM_KEYS, *LATE_ROUND_ITEM_KEYS]
+    return list(BASE_ITEM_KEYS)
 
 
 @dataclass
@@ -214,8 +252,9 @@ def _init_round(state: GameState) -> list[str]:
         line += " (奖池+50%)"
     msgs.append(line)
 
+    item_pool = _item_pool_for_round(rnd)
     for p in _alive_players(state):
-        items = random.choices(ITEM_KEYS, k=cfg["items"])
+        items = random.choices(item_pool, k=cfg["items"])
         p["items"] = items
         item_text = ", ".join(ITEM_NAME.get(i, i) for i in items)
         name = "魔鬼" if p["is_devil"] else p["name"]
@@ -372,6 +411,87 @@ def _use_item(state: GameState, user_tg_id: int, item_key: str, target_tg_id: in
         player["saw_active"] = True
         msgs.append(f"{name} 装上手锯 → 下一枪伤害x2")
 
+    elif item_key == "adrenaline":
+        alive_opponents = [p for p in _alive_players(state) if p["tg_id"] != user_tg_id]
+        target: dict | None = None
+        if target_tg_id:
+            maybe_target = _get_player(state, target_tg_id)
+            if maybe_target and maybe_target["alive"] and maybe_target["tg_id"] != user_tg_id:
+                target = maybe_target
+        if target is None and alive_opponents:
+            stealable_targets = [
+                p for p in alive_opponents if any(i != "adrenaline" for i in p.get("items", []))
+            ]
+            if stealable_targets:
+                stealable_targets.sort(
+                    key=lambda p: sum(1 for i in p.get("items", []) if i != "adrenaline"),
+                    reverse=True,
+                )
+                target = stealable_targets[0]
+            else:
+                target = max(alive_opponents, key=lambda p: p.get("hp", 0))
+
+        if not target:
+            msgs.append(f"{name} 注射肾上腺素 → 没有可偷目标")
+            return msgs
+
+        stealable = [i for i in target.get("items", []) if i != "adrenaline"]
+        t_name = "魔鬼" if target.get("is_devil") else target.get("name", "?")
+        if not stealable:
+            msgs.append(f"{name} 注射肾上腺素 → {t_name} 没有可偷道具")
+            return msgs
+
+        stolen = random.choice(stealable)
+        target["items"].remove(stolen)
+        stolen_name = ITEM_NAME.get(stolen, stolen)
+        msgs.append(f"{name} 注射肾上腺素 → 从 {t_name} 偷到{stolen_name}并立刻使用")
+
+        # Reuse existing item behavior by temporarily granting the stolen item.
+        player["items"].append(stolen)
+        if stolen == "handcuffs":
+            msgs.extend(_use_item(state, user_tg_id, stolen, target_tg_id=target["tg_id"]))
+        elif stolen == "phone":
+            msgs.extend(_use_item(state, user_tg_id, stolen, target_tg_id=1))
+        else:
+            msgs.extend(_use_item(state, user_tg_id, stolen))
+
+    elif item_key == "inverter":
+        if state.shell_index < len(state.shells):
+            state.shells[state.shell_index] = not state.shells[state.shell_index]
+            remaining = state.shells[state.shell_index:]
+            state.live_count = sum(1 for s in remaining if s)
+            state.blank_count = sum(1 for s in remaining if not s)
+
+            # Reverse changes the known truth of current shell; clear stale hints.
+            for p in state.players:
+                p["known_shell"] = None
+            current_live = state.shells[state.shell_index]
+            player["known_shell"] = "live" if current_live else "blank"
+            result = "实弹" if current_live else "空弹"
+            msgs.append(f"{name} 使用逆转器 → 当前子弹变为{result}")
+        else:
+            msgs.append(f"{name} 使用逆转器 → 弹夹空了，无效")
+
+    elif item_key == "phone":
+        if state.shell_index >= len(state.shells):
+            msgs.append(f"{name} 用一次性手机 → 弹夹空了，无效")
+            return msgs
+
+        remaining = len(state.shells) - state.shell_index
+        position = target_tg_id if target_tg_id > 0 else 1
+        if position < 1 or position > remaining:
+            # Invalid position should not consume phone.
+            player["items"].append("phone")
+            msgs.append(f"{name} 用一次性手机 → 位置无效 (1-{remaining})")
+            return msgs
+
+        probe_idx = state.shell_index + position - 1
+        predicted_live = state.shells[probe_idx]
+        result = "实弹" if predicted_live else "空弹"
+        msgs.append(f"{name} 用一次性手机预言第{position}发 → {result}")
+        if position == 1:
+            player["known_shell"] = "live" if predicted_live else "blank"
+
     elif item_key == "beer":
         if state.shell_index < len(state.shells):
             ejected_live = state.shells[state.shell_index]
@@ -444,12 +564,28 @@ def _devil_single_step(state: GameState) -> list[str]:
     items = list(devil.get("items", []))
     known = devil.get("known_shell")
 
-    # Priority: magnifier > handcuffs > beer > cigarette > pill > saw > shoot
+    # Priority: magnifier > phone > inverter > adrenaline > handcuffs > beer > cigarette > pill > saw > shoot
     if "magnifier" in items and not making_mistake and known is None:
         return _use_item(state, DEVIL_TG_ID, "magnifier")
 
+    if "phone" in items and not making_mistake and known is None:
+        return _use_item(state, DEVIL_TG_ID, "phone", target_tg_id=1)
+
     # Re-check known after possible magnifier usage
     known = devil.get("known_shell")
+
+    if "inverter" in items and known == "live" and devil["hp"] <= 1 and not making_mistake:
+        return _use_item(state, DEVIL_TG_ID, "inverter")
+
+    known = devil.get("known_shell")
+
+    if "adrenaline" in items and alive_opponents and not making_mistake:
+        stealable_exists = any(
+            i != "adrenaline" for opponent in alive_opponents for i in opponent.get("items", [])
+        )
+        if stealable_exists:
+            strongest = max(alive_opponents, key=lambda p: p["hp"])
+            return _use_item(state, DEVIL_TG_ID, "adrenaline", target_tg_id=strongest["tg_id"])
 
     if "handcuffs" in items and alive_opponents and not making_mistake:
         strongest = max(alive_opponents, key=lambda p: p["hp"])
@@ -948,7 +1084,7 @@ async def get_game_state(room_id: str) -> GameState | None:
 def render_game_panel(state: GameState, viewer_tg_id: int = 0) -> str:
     """Render game panel text — clean, readable, minimal emoji."""
     if state.phase == "waiting":
-        names = ", ".join(p["name"] for p in state.players)
+        names = ", ".join(_escape_text(p.get("name", "?")) for p in state.players)
         return (
             f"恶魔轮盘赌 - 等待中\n"
             f"{'─' * 22}\n"
@@ -968,7 +1104,7 @@ def render_game_panel(state: GameState, viewer_tg_id: int = 0) -> str:
 
     # HP display — hearts
     for p in state.players:
-        name = "魔鬼" if p.get("is_devil") else p.get("name", "?")
+        name = _format_player_name(p)
         if not p.get("alive"):
             lines.append(f"  💀 {name}  [淘汰]")
             continue
@@ -984,7 +1120,7 @@ def render_game_panel(state: GameState, viewer_tg_id: int = 0) -> str:
         current = _current_turn_tg_id(state)
         cp = _get_player(state, current)
         if cp:
-            c_name = "魔鬼" if cp.get("is_devil") else cp.get("name", "?")
+            c_name = _format_player_name(cp, mention=True)
             lines.append(f"▶ {c_name} 的回合")
 
     # Items — show current turn player's items as readable text
@@ -992,7 +1128,7 @@ def render_game_panel(state: GameState, viewer_tg_id: int = 0) -> str:
     holder = _get_player(state, current_tid)
     if holder and holder.get("alive") and holder.get("items"):
         item_text = ", ".join(ITEM_NAME.get(i, i) for i in holder["items"])
-        holder_name = "魔鬼" if holder.get("is_devil") else holder.get("name", "?")
+        holder_name = _format_player_name(holder)
         lines.append(f"  {holder_name}的道具: {item_text}")
 
     # Show viewer's own items if different from current player
@@ -1015,7 +1151,7 @@ def render_game_panel(state: GameState, viewer_tg_id: int = 0) -> str:
         lines.append("")
         lines.append("📋 行动记录:")
         for entry in recent:
-            lines.append(f"  {entry}")
+            lines.append(f"  {_escape_text(entry)}")
 
     return "\n".join(lines)
 

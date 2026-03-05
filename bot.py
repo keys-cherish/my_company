@@ -99,6 +99,7 @@ def _register_routers(dp: Dispatcher):
             "/company_battle",
             "/company_cooperate",
             "/cp_new_product",
+            "/cp_demon",
             "/company_dissolve",
             "/company_clear",
             "/company_rank",

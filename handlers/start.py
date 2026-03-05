@@ -14,6 +14,7 @@ from commands import (
     CMD_COOPERATE,
     CMD_COMPANY,
     CMD_CREATE_COMPANY,
+    CMD_DEMON,
     CMD_DISSOLVE,
     CMD_GIVE_MONEY,
     CMD_HELP,
@@ -48,6 +49,7 @@ BOT_COMMANDS = [
     BotCommand(command=CMD_BATTLE, description="商战（回复+可选战术）"),
     BotCommand(command=CMD_COOPERATE, description="合作（回复/all）"),
     BotCommand(command=CMD_NEW_PRODUCT, description="创建产品（模板key [名称]）"),
+    BotCommand(command=CMD_DEMON, description="😈 恶魔轮盘赌（可选赌注）"),
     BotCommand(command=CMD_MEMBER, description="员工管理（add/minus 数量）"),
     BotCommand(command=CMD_INVEST, description="Reply invest to user"),
     BotCommand(command=CMD_DISSOLVE, description="注销公司"),
@@ -79,6 +81,7 @@ HELP_TEXT = (
     "📦 /cp_new_product <模板key> [自定义名称]\n"
     "  仅可创建已通过科研解锁的产品模板\n"
     "  可不填自定义名称，不填则使用模板默认名\n\n"
+    "😈 /cp_demon [金额] — 快速打开恶魔轮盘赌（可直接带赌注入场）\n\n"
     "👷 /company_member add|minus <数量|max>\n"
     "/company_invest <积分> - reply target user to invest and gain shares\n"
     "Reply shortcut: invest5000 (must reply target message)\n"
