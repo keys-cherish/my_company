@@ -14,6 +14,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from config import settings
 from db.engine import init_db
+from cache.points_redis_client import close_points_redis
 from cache.redis_client import close_redis
 from scheduler.daily_settlement import set_bot, start_scheduler, stop_scheduler
 
@@ -138,6 +139,11 @@ async def main():
     await init_db()
     logger.info("数据库初始化完成")
 
+    # 启动时批量无损合并：本地个人积分 + 共享积分
+    from services.user_service import sync_all_users_to_shared_points
+    total_users, changed_users = await sync_all_users_to_shared_points()
+    logger.info("共享积分同步完成: users=%d, changed=%d", total_users, changed_users)
+
     # 注册处理器
     _register_routers(dp)
 
@@ -225,6 +231,7 @@ async def main():
                     pass
         stop_scheduler()
         await close_redis()
+        await close_points_redis()
         await bot.session.close()
 
 

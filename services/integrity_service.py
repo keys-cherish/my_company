@@ -176,12 +176,12 @@ async def cleanup_negative_funds(session: AsyncSession) -> list[str]:
     msgs = []
 
     result = await session.execute(
-        select(Company).where(Company.total_funds < 0)
+        select(Company).where(Company.cp_points < 0)
     )
     negative_companies = list(result.scalars().all())
 
     for company in negative_companies:
-        company.total_funds = 0
+        company.cp_points = 0
         msg = f"⚠️ 「{company.name}」积分为负数，已修正为0"
         msgs.append(msg)
         logger.warning(msg)
@@ -220,8 +220,8 @@ async def cleanup_excess_estates(session: AsyncSession) -> list[str]:
             await session.delete(e)
 
         if refund > 0:
-            new_funds = min(company.total_funds + refund, settings.max_company_funds)
-            company.total_funds = new_funds
+            new_funds = min(company.cp_points + refund, settings.max_company_funds)
+            company.cp_points = new_funds
 
         msg = (
             f"⚠️ 「{company.name}」地产超过{max_estates}栋上限，"
@@ -241,12 +241,12 @@ async def cleanup_excess_funds(session: AsyncSession) -> list[str]:
     max_funds = settings.max_company_funds
     msgs = []
     result = await session.execute(
-        select(Company).where(Company.total_funds > max_funds)
+        select(Company).where(Company.cp_points > max_funds)
     )
     over_companies = list(result.scalars().all())
 
     for company in over_companies:
-        company.total_funds = max_funds
+        company.cp_points = max_funds
         msg = f"⚠️ 「{company.name}」积分超过上限({max_funds:,})，已修正"
         msgs.append(msg)
         logger.warning(msg)
@@ -257,17 +257,17 @@ async def cleanup_excess_funds(session: AsyncSession) -> list[str]:
 
 
 async def cleanup_excess_user_traffic(session: AsyncSession) -> list[str]:
-    """Cap user traffic at max_user_traffic, auto-invest excess to company."""
+    """Cap user self_points at max_user_traffic, auto-invest excess to company."""
     max_traffic = settings.max_user_traffic
     msgs = []
     result = await session.execute(
-        select(User).where(User.traffic > max_traffic)
+        select(User).where(User.self_points > max_traffic)
     )
     over_users = list(result.scalars().all())
 
     for user in over_users:
-        overflow = user.traffic - max_traffic
-        user.traffic = max_traffic
+        overflow = user.self_points - max_traffic
+        user.self_points = max_traffic
 
         # Try to invest overflow into user's company
         if overflow > 0:
@@ -275,10 +275,10 @@ async def cleanup_excess_user_traffic(session: AsyncSession) -> list[str]:
             companies = await get_companies_by_owner(session, user.id)
             if companies:
                 new_funds = min(
-                    companies[0].total_funds + overflow,
+                    companies[0].cp_points + overflow,
                     settings.max_company_funds,
                 )
-                companies[0].total_funds = new_funds
+                companies[0].cp_points = new_funds
 
         msg = f"⚠️ 用户「{user.tg_name}」个人积分超过上限({max_traffic:,})，已修正(溢出注资公司)"
         msgs.append(msg)
@@ -342,11 +342,11 @@ async def backfill_company_anomalies(session: AsyncSession) -> list[str]:
             company.employee_count = max_emp
             fixed_emp_cap += 1
 
-        if company.total_funds < 0:
-            company.total_funds = 0
+        if company.cp_points < 0:
+            company.cp_points = 0
             fixed_funds += 1
-        elif company.total_funds > settings.max_company_funds:
-            company.total_funds = settings.max_company_funds
+        elif company.cp_points > settings.max_company_funds:
+            company.cp_points = settings.max_company_funds
             fixed_funds += 1
 
         if company.version < 1:

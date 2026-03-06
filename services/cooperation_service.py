@@ -8,7 +8,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import Company, Cooperation
-from services.user_service import add_reputation, add_points
+from services.user_service import add_reputation, add_self_points
 from utils.timezone import BJ_TZ
 
 DEFAULT_BONUS_MULTIPLIER = 0.02  # +2% per cooperation
@@ -103,8 +103,8 @@ async def create_cooperation(
     # Grant reputation and points to both owners
     await add_reputation(session, ca.owner_id, COOP_REPUTATION_GAIN)
     await add_reputation(session, cb.owner_id, COOP_REPUTATION_GAIN)
-    await add_points(ca.owner_id, 8, session=session)
-    await add_points(cb.owner_id, 8, session=session)
+    await add_self_points(ca.owner_id, 8, session=session)
+    await add_self_points(cb.owner_id, 8, session=session)
 
     # Quest progress
     from services.quest_service import update_quest_progress
@@ -188,8 +188,8 @@ async def cooperate_all(
         # Reputation & points
         await add_reputation(session, my_company.owner_id, COOP_REPUTATION_GAIN)
         await add_reputation(session, target.owner_id, COOP_REPUTATION_GAIN)
-        await add_points(my_company.owner_id, 8, session=session)
-        await add_points(target.owner_id, 8, session=session)
+        await add_self_points(my_company.owner_id, 8, session=session)
+        await add_self_points(target.owner_id, 8, session=session)
 
         # Quest progress
         from services.quest_service import update_quest_progress

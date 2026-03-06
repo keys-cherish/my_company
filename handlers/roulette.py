@@ -21,7 +21,7 @@ from services.roulette_service import (
     _get_player,
     _settle_game,
     cancel_game,
-    consume_points,
+    consume_self_points,
     create_room,
     devil_execute_step,
     get_game_state,
@@ -288,7 +288,7 @@ async def cmd_cp_demon(message: types.Message):
         await mark_panel(sent.chat.id, sent.message_id, tg_id)
         return
 
-    deducted = await consume_points(tg_id, bet)
+    deducted = await consume_self_points(tg_id, bet)
     if not deducted:
         pts = await get_traffic_by_tg_id(tg_id)
         if pts < bet:
@@ -375,7 +375,7 @@ async def cb_roulette_create(callback: types.CallbackQuery):
             return
         player_name = company.name
 
-    ok = await consume_points(tg_id, bet)
+    ok = await consume_self_points(tg_id, bet)
     if not ok:
         pts = await get_traffic_by_tg_id(tg_id)
         if pts < bet:
@@ -437,7 +437,7 @@ async def cb_roulette_join(callback: types.CallbackQuery):
         company_id = company.id
         player_name = company.name
 
-    ok = await consume_points(tg_id, bet)
+    ok = await consume_self_points(tg_id, bet)
     if not ok:
         pts = await get_traffic_by_tg_id(tg_id)
         await callback.answer(f"积分不足 (当前 {pts:,}，需要 {bet:,})", show_alert=True)

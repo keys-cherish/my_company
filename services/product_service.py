@@ -18,7 +18,7 @@ from cache.redis_client import get_redis
 from config import settings
 from db.models import Company, Product, User
 from services.company_service import get_effective_employee_count_for_progress
-from services.user_service import add_points
+from services.user_service import add_self_points
 from utils.formatters import fmt_traffic
 from utils.validators import validate_name
 
@@ -155,7 +155,7 @@ async def create_product(
         return None, f"每日最多创建{MAX_DAILY_PRODUCT_CREATE}个产品"
 
     # 公司积分检查
-    if company.total_funds < investment:
+    if company.cp_points < investment:
         return None, f"公司积分不足，需要 {fmt_traffic(investment)}"
 
     # 扣除投资金额
@@ -181,7 +181,7 @@ async def create_product(
     )
     session.add(product)
     await session.flush()
-    await add_points(owner_user_id, 10, session=session)
+    await add_self_points(owner_user_id, 10, session=session)
 
     # Quest progress
     from services.quest_service import update_quest_progress
@@ -399,7 +399,7 @@ async def upgrade_product(
     cd_key = _product_upgrade_cooldown_key(product.company_id, product.tech_id)
     await r.setex(cd_key, 86400, "1")
 
-    await add_points(owner_user_id, 5, session=session)
+    await add_self_points(owner_user_id, 5, session=session)
 
     return True, (
         f"产品「{product.name}」升级到v{product.version}! "

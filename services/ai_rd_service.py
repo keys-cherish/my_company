@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from db.models import Product
-from services.user_service import add_points, add_reputation
+from services.user_service import add_self_points, add_reputation
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +198,7 @@ async def quick_iterate(
     await update_daily_revenue(session, product.company_id)
 
     await add_reputation(session, owner_user_id, rep_bonus)
-    await add_points(owner_user_id, max(1, rep_bonus * 2), session=session)
+    await add_self_points(owner_user_id, max(1, rep_bonus * 2), session=session)
 
     msg = (
         f"{emoji} {tier_label}！\n"

@@ -134,11 +134,11 @@ async def cmd_transfer(message: types.Message):
                 await message.answer("请先 /cp_start 注册账号")
                 return
 
-            if sender.traffic < amount:
+            if sender.self_points < amount:
                 await message.answer(
                     f"❌ 余额不足！\n"
                     f"需要: {fmt_traffic(amount)}\n"
-                    f"当前: {fmt_traffic(sender.traffic)}"
+                    f"当前: {fmt_traffic(sender.self_points)}"
                 )
                 return
 

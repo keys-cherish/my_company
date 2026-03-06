@@ -81,8 +81,8 @@ async def _execute_dividend(
     if amount > settings.max_daily_dividend:
         return False, f"单次分红不可超过 {fmt_traffic(settings.max_daily_dividend)}", []
 
-    if company.total_funds < amount:
-        return False, f"公司积分不足，当前: {fmt_traffic(company.total_funds)}", []
+    if company.cp_points < amount:
+        return False, f"公司积分不足，当前: {fmt_traffic(company.cp_points)}", []
 
     shareholders = await get_shareholders(session, company_id)
     if not shareholders:
@@ -225,7 +225,7 @@ async def cb_dividend_distribute(callback: types.CallbackQuery):
             "💸 发放分红",
             "─" * 24,
             f"🏢 公司: {company.name}",
-            f"🏦 公司积分: {fmt_traffic(company.total_funds)}",
+            f"🏦 公司积分: {fmt_traffic(company.cp_points)}",
             f"📊 分红税率: {int(DIVIDEND_TAX_RATE * 100)}%",
             "",
             "👥 股东持股比例:",
@@ -261,8 +261,8 @@ async def cb_dividend_confirm(callback: types.CallbackQuery):
         if company.owner_id != user.id:
             await callback.answer("只有老板才能发放分红", show_alert=True)
             return
-        if company.total_funds < amount:
-            await callback.answer(f"公司积分不足，当前: {fmt_traffic(company.total_funds)}", show_alert=True)
+        if company.cp_points < amount:
+            await callback.answer(f"公司积分不足，当前: {fmt_traffic(company.cp_points)}", show_alert=True)
             return
 
         shareholders = await get_shareholders(session, company_id)
@@ -293,7 +293,7 @@ async def cb_dividend_confirm(callback: types.CallbackQuery):
         lines.append("")
         lines.append(f"💰 税后实发: {fmt_traffic(total_net)}")
         lines.append(f"🏛️ 税金扣除: {fmt_traffic(total_tax)}")
-        lines.append(f"🏦 公司积分: {fmt_traffic(company.total_funds)} → {fmt_traffic(company.total_funds - amount)}")
+        lines.append(f"🏦 公司积分: {fmt_traffic(company.cp_points)} → {fmt_traffic(company.cp_points - amount)}")
 
     kb = tag_kb(InlineKeyboardMarkup(inline_keyboard=[
         [

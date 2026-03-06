@@ -253,10 +253,10 @@ async def check_product_create_funds(
     company = await session.get(Company, company_id)
     if not company:
         return None
-    if company.total_funds < dynamic_create_cost:
+    if company.cp_points < dynamic_create_cost:
         return RuleViolation(
             code="INSUFFICIENT_FUNDS",
-            actual=company.total_funds,
+            actual=company.cp_points,
             expected=dynamic_create_cost,
             message=f"公司积分不足，需要 {fmt_traffic(dynamic_create_cost)}",
         )
@@ -464,10 +464,10 @@ async def check_product_upgrade_funds(
     company = await session.get(Company, product.company_id)
     if not company:
         return None
-    if company.total_funds < upgrade_cost:
+    if company.cp_points < upgrade_cost:
         return RuleViolation(
             code="INSUFFICIENT_FUNDS",
-            actual=company.total_funds,
+            actual=company.cp_points,
             expected=upgrade_cost,
             message=f"公司积分不足，升级需要 {fmt_traffic(upgrade_cost)}",
         )

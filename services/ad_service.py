@@ -1,4 +1,4 @@
-"""Advertising system - spend traffic for temporary revenue boost.
+"""Advertising system - spend self_points for temporary revenue boost.
 
 Ad campaigns last N days and provide a percentage revenue bonus.
 Active ad boosts are stored in Redis for fast lookup.

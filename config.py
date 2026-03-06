@@ -50,11 +50,17 @@ class Settings(BaseSettings):
     # Redis
     redis_password: str = ""
     redis_url: str = "redis://localhost:6379/0"
+    # 共享积分Redis（可对接 dice_bot / clans_bot）。留空则使用本地 REDIS_URL。
+    points_redis_host: str = ""
+    points_redis_port: int = 6379
+    points_redis_db: int = 0
+    points_redis_password: str = ""
     redis_stream_enabled: bool = True
     redis_stream_key: str = "my_company:events"
     redis_stream_maxlen: int = 20000
 
     # Game constants
+    shared_initial_points: int = 20_000  # 跨bot共享积分：首次注册赠送
     initial_traffic: int = 30_000
     company_creation_cost: int = 15_000
     min_owner_share_pct: int = 30  # owner must hold >= 30%

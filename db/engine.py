@@ -33,6 +33,35 @@ async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit
 async def _ensure_postgres_schema_compat(conn) -> None:
     """Best-effort compatibility upgrades for older PostgreSQL schemas."""
     statements = [
+        # Rename legacy point columns without data loss.
+        """
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='users' AND column_name='traffic'
+          ) AND NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='users' AND column_name='self_points'
+          ) THEN
+            ALTER TABLE users RENAME COLUMN traffic TO self_points;
+          END IF;
+        END$$
+        """,
+        """
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='companies' AND column_name='total_funds'
+          ) AND NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='companies' AND column_name='cp_points'
+          ) THEN
+            ALTER TABLE companies RENAME COLUMN total_funds TO cp_points;
+          END IF;
+        END$$
+        """,
         # daily_reports legacy compatibility: old DBs may miss these columns
         "ALTER TABLE daily_reports ADD COLUMN IF NOT EXISTS product_income BIGINT NOT NULL DEFAULT 0",
         "ALTER TABLE daily_reports ADD COLUMN IF NOT EXISTS employee_income BIGINT NOT NULL DEFAULT 0",
@@ -47,6 +76,20 @@ async def _ensure_postgres_schema_compat(conn) -> None:
         await conn.execute(text(sql))
 
 
+async def _ensure_sqlite_schema_compat(conn) -> None:
+    """Best-effort compatibility upgrades for older SQLite schemas."""
+    statements = [
+        "ALTER TABLE users RENAME COLUMN traffic TO self_points",
+        "ALTER TABLE companies RENAME COLUMN total_funds TO cp_points",
+    ]
+    for sql in statements:
+        try:
+            await conn.execute(text(sql))
+        except Exception:
+            # Ignore when column already renamed / legacy column does not exist.
+            pass
+
+
 async def init_db():
     """Create all tables (dev convenience; use Alembic for production)."""
     from db.models import Base
@@ -58,3 +101,8 @@ async def init_db():
                 await _ensure_postgres_schema_compat(conn)
             except Exception:
                 logger.exception("PostgreSQL compatibility schema upgrade failed")
+        else:
+            try:
+                await _ensure_sqlite_schema_compat(conn)
+            except Exception:
+                logger.exception("SQLite compatibility schema upgrade failed")

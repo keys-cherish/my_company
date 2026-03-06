@@ -55,11 +55,11 @@ async def _render_bounty_list(callback: types.CallbackQuery, company_id: int, pa
         total_pages = max(1, math.ceil(total_count / BOUNTY_PAGE_SIZE))
         page = max(0, min(page, total_pages - 1))
 
-        # Fetch page of targets, sorted by total_funds descending
+        # Fetch page of targets, sorted by cp_points descending
         result = await session.execute(
             select(Company)
             .where(Company.id != company_id)
-            .order_by(Company.total_funds.desc())
+            .order_by(Company.cp_points.desc())
             .offset(page * BOUNTY_PAGE_SIZE)
             .limit(BOUNTY_PAGE_SIZE)
         )

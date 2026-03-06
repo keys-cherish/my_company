@@ -264,7 +264,7 @@ async def finalize_settlement(
             await session.execute(
                 update(Company)
                 .where(Company.id == company.id, Company.version == old_ver)
-                .values(total_funds=0, version=Company.version + 1)
+                .values(cp_points=0, version=Company.version + 1)
             )
             await session.refresh(company)
 

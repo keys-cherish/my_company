@@ -296,9 +296,9 @@ async def settle_company(session: AsyncSession, company: Company) -> tuple[Daily
 
     # 更新排行榜（多维度）
     await update_leaderboard("revenue", company.name, income.total)
-    await update_leaderboard("funds", company.name, company.total_funds)
+    await update_leaderboard("funds", company.name, company.cp_points)
     valuation = int(
-        company.total_funds * settings.valuation_fund_coeff
+        company.cp_points * settings.valuation_fund_coeff
         + company.daily_revenue * settings.valuation_income_days
     )
     await update_leaderboard("valuation", company.name, valuation)
@@ -315,7 +315,7 @@ async def settle_company(session: AsyncSession, company: Company) -> tuple[Daily
         )
     )).scalars().all()
     power = (
-        company.total_funds * 0.3
+        company.cp_points * 0.3
         + company.daily_revenue * 30
         + company.employee_count * 1000
         + len(tech_count) * 2000

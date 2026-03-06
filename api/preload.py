@@ -12,7 +12,7 @@ from cache.redis_client import get_redis
 from db.engine import async_session
 from db.models import Product, ResearchProgress, Shareholder
 from services.company_service import get_companies_by_owner
-from services.user_service import get_or_create_user, get_points, get_user_by_tg_id
+from services.user_service import get_or_create_user, get_user_by_tg_id
 
 _PRELOAD_CACHE_PREFIX = "miniapp:preload"
 
@@ -29,7 +29,7 @@ def _safe_company_summary(company) -> dict[str, Any]:
         "level": company.level,
         "employee_count": company.employee_count,
         "daily_revenue": int(company.daily_revenue),
-        "total_funds": int(company.total_funds),
+        "cp_points": int(company.cp_points),
     }
 
 
@@ -99,16 +99,14 @@ async def _build_preload_payload(tg_id: int, company_id: int | None) -> dict[str
                 ],
             }
 
-    points = await get_points(tg_id)
     company_list = [_safe_company_summary(c) for c in companies]
     return {
         "user": {
             "id": user.id,
             "tg_id": user.tg_id,
             "name": user.tg_name,
-            "traffic": int(user.traffic),
+            "self_points": int(user.self_points),
             "reputation": int(user.reputation),
-            "points": int(points),
         },
         "companies": company_list,
         "active_company": active_company_payload,
@@ -152,4 +150,3 @@ async def load_preload_data(
     payload = await _build_preload_payload(tg_id, company_id)
     await _set_cached_preload(tg_id, company_id, payload, cache_ttl_seconds)
     return payload
-

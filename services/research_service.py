@@ -17,7 +17,7 @@ from services.company_service import (
     get_company_type_info,
     get_effective_employee_count_for_progress,
 )
-from services.user_service import add_reputation, add_points
+from services.user_service import add_reputation, add_self_points
 from utils.formatters import fmt_traffic
 
 _tech_tree: dict | None = None
@@ -305,7 +305,7 @@ async def start_research(
     await session.flush()
 
     # Grant points for starting research
-    await add_points(owner_user_id, 5, session=session)
+    await add_self_points(owner_user_id, 5, session=session)
 
     from utils.formatters import fmt_duration
     # 重新获取公司信息（可能已被刷新）
@@ -358,7 +358,7 @@ async def check_and_complete_research(
             if company:
                 rep = tech.get("reputation_reward", settings.reputation_per_research)
                 await add_reputation(session, company.owner_id, rep)
-                await add_points(company.owner_id, rep, session=session)
+                await add_self_points(company.owner_id, rep, session=session)
 
                 # Quest progress
                 from services.quest_service import update_quest_progress

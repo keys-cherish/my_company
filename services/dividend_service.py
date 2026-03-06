@@ -8,7 +8,7 @@ from config import settings
 from db.models import Company
 from services.company_service import add_funds
 from services.shareholder_service import get_shareholders
-from services.user_service import add_reputation, add_traffic, add_points
+from services.user_service import add_reputation, add_traffic, add_self_points
 
 
 async def distribute_dividends(
@@ -62,7 +62,7 @@ async def distribute_dividends(
         await add_reputation(session, user_id, rep)
 
         # Points for receiving dividends
-        await add_points(user_id, 2, session=session)
+        await add_self_points(user_id, 2, session=session)
 
     if failed_total > 0:
         await add_funds(session, company.id, failed_total)

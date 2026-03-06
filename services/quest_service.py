@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import WeeklyTask
-from services.user_service import add_points, add_traffic
+from services.user_service import add_self_points, add_traffic
 
 _quest_definitions: list[dict] | None = None
 
@@ -129,7 +129,7 @@ async def claim_quest_reward(
         return False, "任务定义不存在"
 
     if q["reward_points"]:
-        await add_points(user_id, q["reward_points"], session=session)
+        await add_self_points(user_id, q["reward_points"], session=session)
     if q["reward_currency"]:
         await add_traffic(session, user_id, q["reward_currency"])
 

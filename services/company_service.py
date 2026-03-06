@@ -35,7 +35,7 @@ async def create_company(
     name: str,
     company_type: str = "tech",
 ) -> tuple[Company | None, str]:
-    """Create a company. Deducts creation cost from owner's traffic."""
+    """Create a company. Deducts creation cost from owner's self_points."""
     types = load_company_types()
     if company_type not in types:
         return None, "无效的公司类型"
@@ -55,7 +55,7 @@ async def create_company(
     # 先保存owner_id，因为add_traffic会expire owner对象
     owner_id = owner.id
 
-    # Deduct traffic
+    # Deduct self_points
     ok = await add_traffic(session, owner_id, -settings.company_creation_cost)
     if not ok:
         from utils.formatters import fmt_traffic
@@ -66,7 +66,7 @@ async def create_company(
         name=name,
         company_type=company_type,
         owner_id=owner_id,
-        total_funds=settings.company_creation_cost,
+        cp_points=settings.company_creation_cost,
         employee_count=settings.base_employee_limit,
     )
     session.add(company)
@@ -94,9 +94,9 @@ async def get_companies_by_owner(session: AsyncSession, owner_id: int) -> list[C
 
 
 async def get_company_valuation(session: AsyncSession, company: Company) -> int:
-    """Valuation = (total_funds * coeff + daily_revenue * 30) modified by ethics."""
+    """Valuation = (cp_points * coeff + daily_revenue * 30) modified by ethics."""
     base = int(
-        company.total_funds * settings.valuation_fund_coeff
+        company.cp_points * settings.valuation_fund_coeff
         + company.daily_revenue * settings.valuation_income_days
     )
     # Ethics modifier
@@ -137,18 +137,18 @@ async def add_funds(
     company = await session.get(Company, company_id)
     if company is None:
         return False
-    if amount < 0 and company.total_funds + amount < 0:
+    if amount < 0 and company.cp_points + amount < 0:
         return False
     # Cap at max_company_funds
-    new_funds = min(company.total_funds + amount, settings.max_company_funds)
-    actual_amount = new_funds - company.total_funds
+    new_funds = min(company.cp_points + amount, settings.max_company_funds)
+    actual_amount = new_funds - company.cp_points
     if actual_amount == 0:
         return True
     old_ver = company.version
     result = await session.execute(
         update(Company)
         .where(Company.id == company_id, Company.version == old_ver)
-        .values(total_funds=new_funds, version=Company.version + 1)
+        .values(cp_points=new_funds, version=Company.version + 1)
     )
     if result.rowcount == 0:
         return False
@@ -162,7 +162,7 @@ async def add_funds(
         company_id,
         actual_amount,
         reason,
-        balance_after=company.total_funds,
+        balance_after=company.cp_points,
     )
     return True
 

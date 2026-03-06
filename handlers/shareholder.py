@@ -151,7 +151,7 @@ async def _handle_reply_invest(message: types.Message, amount: int):
                 await message.answer("你还没有公司，无法注资。请先 /cp_create 创建公司。")
                 return
             investor_company = investor_companies[0]
-            investor_quota = int(investor_company.total_funds)
+            investor_quota = int(investor_company.cp_points)
             if amount > investor_quota:
                 await message.answer(
                     f"公司资金不足，当前可用：{fmt_traffic(investor_quota)}。"

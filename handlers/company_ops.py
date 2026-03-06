@@ -333,13 +333,13 @@ async def cb_ops_train(callback: types.CallbackQuery):
         f"👥 当前员工：{company.employee_count}人",
         f"💰 费用 = {company.employee_count}人 × {info['hourly_cost']}金/时 × {info['duration_hours']}h",
         f"💰 总计：{fmt_traffic(total_cost)}",
-        f"🏦 公司积分：{fmt_traffic(company.total_funds)}",
+        f"🏦 公司积分：{fmt_traffic(company.cp_points)}",
         f"{'─' * 24}",
         f"🎭 开始培训额外+4文化值",
     ])
 
-    if total_cost > company.total_funds:
-        lines.append(f"❌ 积分不足！还差 {fmt_traffic(total_cost - company.total_funds)}")
+    if total_cost > company.cp_points:
+        lines.append(f"❌ 积分不足！还差 {fmt_traffic(total_cost - company.cp_points)}")
 
     kb = tag_kb(InlineKeyboardMarkup(inline_keyboard=[
         [

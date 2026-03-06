@@ -159,7 +159,7 @@ async def cb_aird_confirm(callback: types.CallbackQuery):
         f"产品：{product.name} v{product.version}",
         f"当前日收入：{fmt_traffic(product.daily_income)}",
         f"迭代费用：{fmt_traffic(cost)}",
-        f"🏦 公司积分：{fmt_traffic(company.total_funds)}",
+        f"🏦 公司积分：{fmt_traffic(company.cp_points)}",
         f"{'─' * 24}",
         f"📦 小幅改进(40%) | 📈 稳步提升(30%)",
         f"🌟 重大突破(20%) | 🏆 创新飞跃(10%)",
@@ -168,8 +168,8 @@ async def cb_aird_confirm(callback: types.CallbackQuery):
     ]
     if _rd_company_cd_seconds() > 0:
         lines.append(f"🏢 公司冷却：{fmt_duration(_rd_company_cd_seconds())}")
-    if cost > company.total_funds:
-        lines.append(f"❌ 积分不足！还差 {fmt_traffic(cost - company.total_funds)}")
+    if cost > company.cp_points:
+        lines.append(f"❌ 积分不足！还差 {fmt_traffic(cost - company.cp_points)}")
 
     kb = tag_kb(InlineKeyboardMarkup(inline_keyboard=[
         [
