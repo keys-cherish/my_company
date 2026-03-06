@@ -5,6 +5,7 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cache.redis_client import get_redis
+from services.user_service import get_self_points
 from utils.rules import Rule, RuleViolation
 
 
@@ -133,9 +134,7 @@ async def check_battle_points(
     """检查积分是否足够。"""
     if battle_point_cost <= 0:
         return None
-    r = await get_redis()
-    current = await r.get(f"points:{attacker_tg_id}")
-    current_points = int(current) if current else 0
+    current_points = await get_self_points(attacker_tg_id)
     if current_points < battle_point_cost:
         return RuleViolation(
             code="INSUFFICIENT_POINTS",

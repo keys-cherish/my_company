@@ -195,7 +195,7 @@ async def cmd_redpacket(message: types.Message):
             if not deduct_ok:
                 await message.answer(
                     f"❌ 公司积分不足！需要 {fmt_traffic(total_amount)}，"
-                    f"当前余额 {fmt_traffic(company.total_funds)}"
+                    f"当前余额 {fmt_traffic(company.cp_points)}"
                 )
                 return
 

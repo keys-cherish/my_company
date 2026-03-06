@@ -48,9 +48,8 @@ const fmt = (num: number | undefined) => {
             <template #title>�����Ϣ</template>
             <template #desc>
               <div class="line">�ǳƣ�{{ user?.name || '-' }}</div>
-              <div class="line">��ң�{{ fmt(user?.traffic) }}</div>
+              <div class="line">��ң�{{ fmt(user?.self_points) }}</div>
               <div class="line">������{{ fmt(user?.reputation) }}</div>
-              <div class="line">���֣�{{ fmt(user?.points) }}</div>
             </template>
           </van-card>
 
@@ -64,7 +63,7 @@ const fmt = (num: number | undefined) => {
               <div class="line">��ҵ��{{ activeCompany.company_type }}</div>
               <div class="line">Ա����{{ fmt(activeCompany.employee_count) }}</div>
               <div class="line">��Ӫ�գ�{{ fmt(activeCompany.daily_revenue) }}</div>
-              <div class="line">�ʽ�{{ fmt(activeCompany.total_funds) }}</div>
+              <div class="line">�ʽ�{{ fmt(activeCompany.cp_points) }}</div>
               <div class="line">�ɶ���{{ fmt(activeCompany.shareholder_count) }}</div>
               <div class="line">��Ʒ��{{ fmt(activeCompany.product_count) }}</div>
               <div class="line">�Ƽ���{{ fmt(activeCompany.completed_research_count) }}</div>
@@ -95,7 +94,7 @@ const fmt = (num: number | undefined) => {
                   :key="company.id"
                   :title="company.name"
                   :label="`��ҵ ${company.company_type} �� Lv.${company.level}`"
-                  :value="`�ʽ� ${fmt(company.total_funds)}`"
+                  :value="`�ʽ� ${fmt(company.cp_points)}`"
                 />
               </van-cell-group>
             </template>

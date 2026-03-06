@@ -296,7 +296,7 @@ async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, Inlin
         f"📊 等级：{level_badge}【Lv.{company.level} {level_name}】[{bar10(company.level, 1, max_level)}]\n"
         f"⭐ 声望：{rep_value}（评级 {reputation_rating(rep_value)}）\n"
         f"👥 员工：{company.employee_count}/{max_employees}\n"
-        f"💰 积分余额：{fmt_quota(company.total_funds)}\n"
+        f"💰 积分余额：{fmt_quota(company.cp_points)}\n"
         f"😐 道德：{profile.ethics} [{bar10(profile.ethics, -100, 100)}] {ethics_rating(profile.ethics)}\n"
         f"⏰ 工时：{profile.work_hours}h {work_info['label']} | 营收×{work_info['income_mult']:.2f} | 成本×{work_info['cost_mult']:.2f} | 道德{work_info['ethics_delta']:+d}/日\n"
         f"🏢 办公：{office_info['name']} | 营收×{office_info['income_mult']:.2f} | 办公开销 {office_info['employee_cost']}/人/日\n"

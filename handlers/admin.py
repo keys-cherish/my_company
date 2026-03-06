@@ -27,7 +27,7 @@ from services.company_service import (
     get_company_type_info,
 )
 from services.cooperation_service import get_active_cooperations
-from services.user_service import add_points, add_traffic, get_user_by_tg_id
+from services.user_service import add_self_points, add_traffic, get_user_by_tg_id
 from utils.maintenance import (
     COMPENSATION_PIN_KEY,
     MAINTENANCE_COMPENSATION_BONUS,
@@ -212,7 +212,7 @@ async def cb_buff_list(callback: types.CallbackQuery):
 
 @router.message(Command(CMD_GIVE_MONEY))
 async def cmd_give_money(message: types.Message):
-    """超管命令：回复某人并发放积分，同时奖励荣誉点。"""
+    """超管命令：回复某人并发放积分，同时奖励个人积分。"""
     if not is_super_admin(message.from_user.id):
         await message.answer("❌ 无权使用此命令")
         return
@@ -268,17 +268,17 @@ async def cmd_give_money(message: types.Message):
                     await message.answer("❌ 发放失败，请稍后重试")
                     return
 
-            new_points = await add_points(user.id, points_gain, session=session)
+            new_points = await add_self_points(user.id, points_gain, session=session)
 
     if credited_company_name:
         await message.answer(
             f"✅ 已向 {target.full_name} 的公司「{credited_company_name}」发放 {fmt_currency(amount)}\n"
-            f"🎁 同步奖励积分: +{points_gain:,}（当前 {new_points:,}）"
+            f"🎁 同步奖励个人积分: +{points_gain:,}（当前 {new_points:,}）"
         )
     else:
         await message.answer(
             f"✅ 已向 {target.full_name} 发放 {fmt_currency(amount)}（个人钱包）\n"
-            f"🎁 同步奖励积分: +{points_gain:,}（当前 {new_points:,}）"
+            f"🎁 同步奖励个人积分: +{points_gain:,}（当前 {new_points:,}）"
         )
 
 
@@ -328,7 +328,7 @@ async def cmd_deduct_money(message: types.Message):
 
             target_company = target_companies[0]
             # 最多扣到公司资金的99%，保留至少1%
-            max_deduct = int(target_company.total_funds * 0.99)
+            max_deduct = int(target_company.cp_points * 0.99)
             actual = min(amount, max_deduct)
             if actual <= 0:
                 await message.answer(f"❌ 公司「{target_company.name}」资金不足，无法扣除")
@@ -500,7 +500,7 @@ async def cmd_compensate(message: types.Message):
             total_users = int((await session.execute(select(sqlfunc.count(User.id)))).scalar() or 0)
             if total_users > 0:
                 await session.execute(
-                    update(User).values(traffic=User.traffic + MAINTENANCE_COMPENSATION_BONUS)
+                    update(User).values(self_points=User.self_points + MAINTENANCE_COMPENSATION_BONUS)
                 )
 
     await clear_maintenance_mode()

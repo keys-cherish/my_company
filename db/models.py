@@ -29,7 +29,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
     tg_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    traffic: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    self_points: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     reputation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)  # optimistic lock
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, server_default=func.now())
@@ -47,7 +47,7 @@ class Company(Base):
     name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     company_type: Mapped[str] = mapped_column(String(32), nullable=False, default="tech")
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
-    total_funds: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    cp_points: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     daily_revenue: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     level: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     employee_count: Mapped[int] = mapped_column(Integer, nullable=False, default=10)

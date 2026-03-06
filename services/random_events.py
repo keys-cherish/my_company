@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import Company, Product
 from services.company_service import add_funds, get_company_employee_limit
-from services.user_service import add_points, add_reputation
+from services.user_service import add_self_points, add_reputation
 
 
 @dataclass
@@ -251,7 +251,7 @@ async def _apply_event(session: AsyncSession, company: Company, event: GameEvent
         else:
             effect_desc = "无产品受影响"
 
-    await add_points(company.owner_id, 1, session=session)
+    await add_self_points(company.owner_id, 1, session=session)
 
     category_emoji = {"employee": "👤", "market": "📊", "pr": "📰", "lucky": "🎲"}
     emoji = category_emoji.get(event.category, "❓")

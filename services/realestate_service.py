@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from db.models import RealEstate
 from services.company_service import add_funds
-from services.user_service import add_points
+from services.user_service import add_self_points
 
 _buildings_data: dict | None = None
 
@@ -127,7 +127,7 @@ async def purchase_building(
     session.add(estate)
     await session.flush()
 
-    await add_points(owner_tg_id, 15)
+    await add_self_points(owner_tg_id, 15)
 
     remaining = max_count - current_count - 1
     return True, (

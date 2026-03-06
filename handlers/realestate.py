@@ -212,12 +212,12 @@ async def cb_buy_building(callback: types.CallbackQuery):
         f"{'─' * 24}",
         f"📦 已拥有：{owned}/{max_c}",
         f"🏗 地产总数：{total_count}/{settings.max_total_estates}",
-        f"🏦 公司积分：{fmt_traffic(company.total_funds)}",
+        f"🏦 公司积分：{fmt_traffic(company.cp_points)}",
     ]
     if total_count >= settings.max_total_estates:
         lines.append(f"❌ 地产总数已达上限（{settings.max_total_estates}栋）")
-    elif bld["purchase_price"] > company.total_funds:
-        lines.append(f"❌ 积分不足！还差 {fmt_traffic(bld['purchase_price'] - company.total_funds)}")
+    elif bld["purchase_price"] > company.cp_points:
+        lines.append(f"❌ 积分不足！还差 {fmt_traffic(bld['purchase_price'] - company.cp_points)}")
 
     kb = tag_kb(InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -300,10 +300,10 @@ async def cb_upgrade_estate(callback: types.CallbackQuery):
         f"📈 当前日收益：{fmt_traffic(estate.daily_dividend)}",
         f"📈 升级后日收益：{fmt_traffic(new_income)}（+{fmt_traffic(income_increase)}）",
         f"{'─' * 24}",
-        f"🏦 公司积分：{fmt_traffic(company.total_funds)}",
+        f"🏦 公司积分：{fmt_traffic(company.cp_points)}",
     ]
-    if cost > company.total_funds:
-        lines.append(f"❌ 积分不足！还差 {fmt_traffic(cost - company.total_funds)}")
+    if cost > company.cp_points:
+        lines.append(f"❌ 积分不足！还差 {fmt_traffic(cost - company.cp_points)}")
 
     kb = tag_kb(InlineKeyboardMarkup(inline_keyboard=[
         [

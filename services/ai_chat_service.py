@@ -169,7 +169,7 @@ GAME_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_my_profile",
-            "description": "查看提问者的个人信息：积分、声望、荣誉点等",
+            "description": "查看提问者的个人信息：个人积分、声望等",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -421,7 +421,7 @@ GAME_TOOLS = [
 
 async def _exec_get_my_profile(tg_id: int) -> str:
     from db.engine import async_session
-    from services.user_service import get_user_by_tg_id, get_points
+    from services.user_service import get_user_by_tg_id
     from services.company_service import get_companies_by_owner
 
     async with async_session() as session:
@@ -431,12 +431,10 @@ async def _exec_get_my_profile(tg_id: int) -> str:
         companies = await get_companies_by_owner(session, user.id)
         company_names = ", ".join(c.name for c in companies) if companies else "无"
 
-    points = await get_points(tg_id)
     return (
         f"用户: {user.tg_name}\n"
-        f"积分: {user.traffic:,}\n"
+        f"个人积分: {user.self_points:,}\n"
         f"声望: {user.reputation}\n"
-        f"荣誉点: {points:,}\n"
         f"公司: {company_names}"
     )
 
@@ -479,7 +477,7 @@ async def _exec_get_my_company(tg_id: int) -> str:
         f"公司: {company.name} (ID:{company.id})\n"
         f"类型: {type_info.get('name', company.company_type)}\n"
         f"等级: Lv.{company.level} {level_info.get('name', '')}\n"
-        f"积分余额: {company.total_funds:,} 积分\n"
+        f"积分余额: {company.cp_points:,} 积分\n"
         f"日营收: {company.daily_revenue:,} 积分\n"
         f"估值: {valuation:,} 积分\n"
         f"员工: {company.employee_count}/{max_emp}\n"
@@ -498,7 +496,7 @@ async def _exec_list_companies() -> str:
 
     async with async_session() as session:
         result = await session.execute(
-            select(Company).order_by(Company.total_funds.desc())
+            select(Company).order_by(Company.cp_points.desc())
         )
         companies = list(result.scalars().all())
 
@@ -511,7 +509,7 @@ async def _exec_list_companies() -> str:
         emoji = type_info["emoji"] if type_info else ""
         lines.append(
             f"{i}. {emoji} {c.name} | Lv.{c.level} | "
-            f"积分余额:{c.total_funds:,} | 日营收:{c.daily_revenue:,} | 员工:{c.employee_count}"
+            f"积分余额:{c.cp_points:,} | 日营收:{c.daily_revenue:,} | 员工:{c.employee_count}"
         )
     return "\n".join(lines)
 
@@ -567,7 +565,7 @@ async def _exec_hire_employees(tg_id: int, count: int) -> str:
 
             ok = await add_funds(session, company.id, -total_cost)
             if not ok:
-                affordable = company.total_funds // hire_cost_per
+                affordable = company.cp_points // hire_cost_per
                 if affordable <= 0:
                     return f"公司积分不足，每人招聘需要 {hire_cost_per:,} 积分。"
                 hire = affordable
@@ -804,8 +802,8 @@ async def _exec_company_dividend(tg_id: int, amount: int) -> str:
             company = companies[0]
             if company.owner_id != user.id:
                 return "只有公司老板才能分红。"
-            if company.total_funds < amount:
-                return f"公司积分不足，当前: {company.total_funds:,}，需要: {amount:,}"
+            if company.cp_points < amount:
+                return f"公司积分不足，当前: {company.cp_points:,}，需要: {amount:,}"
             distributions = await distribute_dividends(session, company, amount)
 
     if not distributions:
@@ -941,7 +939,7 @@ async def _exec_rename_company(tg_id: int, new_name: str) -> str:
             company = await session.get(Company, company_id)
             if not company:
                 return "公司不存在。"
-            rename_cost = max(5000, int(company.total_funds * 0.05))
+            rename_cost = max(5000, int(company.cp_points * 0.05))
             ok = await add_funds(session, company_id, -rename_cost)
             if not ok:
                 return f"公司资金不足，改名需要 {rename_cost:,} 积分"

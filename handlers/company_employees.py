@@ -90,7 +90,7 @@ async def cmd_member(message: types.Message):
 
                 ok = await add_funds(session, company.id, -total_cost)
                 if not ok:
-                    affordable = company.total_funds // hire_cost_per
+                    affordable = company.cp_points // hire_cost_per
                     if affordable <= 0:
                         await message.answer(f"❌ 公司积分不足，每人招聘需要 {fmt_traffic(hire_cost_per)}")
                         return
@@ -253,10 +253,10 @@ async def cb_hire(callback: types.CallbackQuery):
         f"👥 当前员工：{company.employee_count}/{max_emp}人",
         f"📈 招聘后日产出增加：+{fmt_traffic(income_increase)}/日",
         f"📌 招聘后日薪增加：+{fmt_traffic(daily_salary)}/日",
-        f"🏦 公司积分余额：{fmt_traffic(company.total_funds)}",
+        f"🏦 公司积分余额：{fmt_traffic(company.cp_points)}",
     ]
-    if total_cost > company.total_funds:
-        affordable = company.total_funds // hire_cost_per
+    if total_cost > company.cp_points:
+        affordable = company.cp_points // hire_cost_per
         lines.append(f"⚠️ 积分仅够招 {affordable} 人")
 
     kb = tag_kb(InlineKeyboardMarkup(inline_keyboard=[
@@ -314,7 +314,7 @@ async def cb_do_hire(callback: types.CallbackQuery):
             ok = await add_funds(session, company_id, -total_cost)
             if not ok:
                 if hire_count > 1:
-                    affordable = company.total_funds // hire_cost_per
+                    affordable = company.cp_points // hire_cost_per
                     if affordable <= 0:
                         await callback.answer(f"公司积分不足，每人招聘需要 {fmt_traffic(hire_cost_per)}", show_alert=True)
                         return

@@ -87,12 +87,12 @@ async def check_upgrade_funds(
     if not company:
         return None
     cost = next_info["upgrade_cost"]
-    if company.total_funds < cost:
+    if company.cp_points < cost:
         return RuleViolation(
             code="INSUFFICIENT_FUNDS",
-            actual=company.total_funds,
+            actual=company.cp_points,
             expected=cost,
-            message=f"积分: {fmt_traffic(company.total_funds)}/{fmt_traffic(cost)}",
+            message=f"积分: {fmt_traffic(company.cp_points)}/{fmt_traffic(cost)}",
         )
     return None
 

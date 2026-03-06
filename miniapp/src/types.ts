@@ -5,7 +5,7 @@ export interface MiniAppCompanySummary {
   level: number;
   employee_count: number;
   daily_revenue: number;
-  total_funds: number;
+  cp_points: number;
 }
 
 export interface MiniAppProductSummary {
@@ -28,9 +28,8 @@ export interface MiniAppPreload {
     id: number;
     tg_id: number;
     name: string;
-    traffic: number;
+    self_points: number;
     reputation: number;
-    points: number;
   } | null;
   companies: MiniAppCompanySummary[];
   active_company: MiniAppActiveCompany | null;

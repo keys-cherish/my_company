@@ -134,7 +134,7 @@ def _calc_base_power(company: Company, product_count: int, tech_count: int) -> f
     """Calculate static power before strategy and random roll."""
     return max(
         1000.0,
-        company.total_funds * 0.3
+        company.cp_points * 0.3
         + company.daily_revenue * 30
         + company.employee_count * 1000
         + tech_count * 2000
@@ -154,19 +154,13 @@ def _next_settlement_time() -> dt.datetime:
 async def _consume_battle_points(tg_id: int, amount: int) -> bool:
     if amount <= 0:
         return True
-    lua = """
-local key = KEYS[1]
-local amount = tonumber(ARGV[1])
-local current = tonumber(redis.call('GET', key) or '0')
-if current < amount then
-    return 0
-end
-redis.call('DECRBY', key, amount)
-return 1
-"""
-    r = await get_redis()
-    ok = await r.eval(lua, 1, f"points:{tg_id}", amount)
-    return int(ok) == 1
+    from services.user_service import add_self_points_by_tg_id
+
+    return await add_self_points_by_tg_id(
+        tg_id,
+        -amount,
+        reason="battle_consume",
+    )
 
 
 async def _set_revenue_debuff(company_id: int, rate: float) -> float:
@@ -299,7 +293,7 @@ def _calc_battle_damage(
 
     damage_mult = max(0.60, min(1.80, intensity * strategy.self_damage_mult))
 
-    funds_loss = int(company.total_funds * fund_rate * damage_mult)
+    funds_loss = int(company.cp_points * fund_rate * damage_mult)
     funds_loss = max(200 if is_winner else 500, funds_loss)
     funds_loss = min(80_000 if is_winner else 150_000, funds_loss)
 
@@ -336,8 +330,8 @@ async def _apply_company_damage(
     employee_loss: int,
 ) -> tuple[int, int]:
     actual_funds_loss = 0
-    if funds_loss > 0 and company.total_funds > 0:
-        deduct = min(funds_loss, company.total_funds)
+    if funds_loss > 0 and company.cp_points > 0:
+        deduct = min(funds_loss, company.cp_points)
         ok = await add_funds(session, company.id, -deduct)
         if ok:
             actual_funds_loss = deduct
@@ -416,7 +410,7 @@ async def do_battle(
         winner_base = attacker_base if attacker_won else defender_base
         loser_base = defender_base if attacker_won else attacker_base
         loot_scale = _calc_loot_scale(winner_base, loser_base, winner_strategy)
-        raw_loot = int(loser.total_funds * BASE_LOOT_RATE * loot_scale)
+        raw_loot = int(loser.cp_points * BASE_LOOT_RATE * loot_scale)
         loot = max(MIN_LOOT // 2, min(MAX_LOOT // 2, raw_loot // 2))
         if loot > 0:
             await add_funds(session, winner.id, loot)
@@ -472,13 +466,13 @@ async def do_battle(
     winner_base = attacker_base if attacker_won else defender_base
     loser_base = defender_base if attacker_won else attacker_base
     loot_scale = _calc_loot_scale(winner_base, loser_base, winner_strategy)
-    raw_loot = int(loser.total_funds * BASE_LOOT_RATE * loot_scale)
+    raw_loot = int(loser.cp_points * BASE_LOOT_RATE * loot_scale)
     # Apply bounty loot bonus if attacker won and bounty is active
     if attacker_won and bounty_loot > 0:
         raw_loot = int(raw_loot * (1.0 + bounty_loot))
     loot = max(MIN_LOOT, min(MAX_LOOT, raw_loot))
-    if loser.total_funds < loot:
-        loot = max(0, loser.total_funds)
+    if loser.cp_points < loot:
+        loot = max(0, loser.cp_points)
 
     if loot > 0:
         taken = await add_funds(session, loser.id, -loot)

@@ -50,8 +50,8 @@ def _format_player_name(player: dict, *, mention: bool = False) -> str:
     return safe_name
 
 
-async def consume_points(tg_id: int, amount: int) -> bool:
-    """Atomically deduct user traffic balance for roulette bet."""
+async def consume_self_points(tg_id: int, amount: int) -> bool:
+    """Atomically deduct user self_points balance for roulette bet."""
     if amount <= 0:
         return True
     from services.user_service import add_traffic_by_tg_id
@@ -945,7 +945,7 @@ async def cancel_game(
                         reason="roulette_waiting_cancel_refund",
                     )
                 except Exception:
-                    logger.exception("Failed to refund roulette traffic for tg_id=%s", p["tg_id"])
+                    logger.exception("Failed to refund roulette self_points for tg_id=%s", p["tg_id"])
 
         await _cleanup_room(room_id, [p["tg_id"] for p in state.players])
         return True, "❌ 房间已关闭，已全额退还积分"
@@ -969,7 +969,7 @@ async def cancel_game(
                     reason="roulette_forfeit_refund",
                 )
             except Exception:
-                logger.exception("Failed to refund roulette forfeit traffic")
+                logger.exception("Failed to refund roulette forfeit self_points")
         state.forfeited_pool += refund
 
         end_msgs = _check_round_end(state)
@@ -1022,7 +1022,7 @@ async def _settle_game(state: GameState) -> str:
         try:
             await add_traffic_by_tg_id(winner["tg_id"], winnings, reason="roulette_winnings")
         except Exception:
-            logger.exception("Failed to settle roulette winnings (traffic)")
+            logger.exception("Failed to settle roulette winnings (self_points)")
 
         try:
             from db.engine import async_session
@@ -1119,7 +1119,7 @@ async def leave_room(
                 reason="roulette_leave_refund",
             )
         except Exception:
-            logger.exception("Failed to refund leave_room traffic for tg_id=%s", tg_id)
+            logger.exception("Failed to refund leave_room self_points for tg_id=%s", tg_id)
 
     return True, f"✅ 已退出房间，退还 {state.bet:,} 积分", state
 

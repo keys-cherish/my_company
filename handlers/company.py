@@ -18,7 +18,6 @@ from commands import (
     CMD_RANK_COMPANY,
     CMD_RENAME,
 )
-from config import settings as cfg
 from db.engine import async_session
 from db.models import (
     Company,
@@ -56,7 +55,7 @@ from services.company_service import (
     load_company_types,
     upgrade_company,
 )
-from services.user_service import add_traffic, get_or_create_user, get_user_by_tg_id
+from services.user_service import get_or_create_user, get_user_by_tg_id
 from utils.formatters import compact_number, fmt_quota, fmt_traffic
 from utils.panel_owner import mark_panel
 from utils.validators import validate_name
@@ -71,7 +70,7 @@ async def cmd_list_company(message: types.Message):
     """列出服务器上所有公司。"""
     async with async_session() as session:
         result = await session.execute(
-            select(Company).order_by(Company.total_funds.desc())
+            select(Company).order_by(Company.cp_points.desc())
         )
         companies = list(result.scalars().all())
 
@@ -85,7 +84,7 @@ async def cmd_list_company(message: types.Message):
         emoji = type_info["emoji"] if type_info else "🏢"
         lines.append(
             f"{i}. {emoji} {c.name} (ID:{c.id})\n"
-            f"   Lv.{c.level} | 积分余额:{fmt_traffic(c.total_funds)} | "
+            f"   Lv.{c.level} | 积分余额:{fmt_traffic(c.cp_points)} | "
             f"日营收:{fmt_traffic(c.daily_revenue)} | 👷{c.employee_count}人"
         )
 
@@ -119,7 +118,7 @@ async def cmd_rank_company(message: types.Message):
 
             # Deterministic power score (no randomness)
             power = (
-                company.total_funds * 0.3
+                company.cp_points * 0.3
                 + company.daily_revenue * 30
                 + company.employee_count * 1000
                 + tech_count * 2000
@@ -301,13 +300,9 @@ async def cmd_create_company(message: types.Message, state: FSMContext):
 
     welcome = ""
     if created:
-        welcome = f"欢迎加入 商业帝国! 已发放初始积分: {fmt_traffic(cfg.initial_traffic)}\n\n"
+        welcome = f"欢迎加入 商业帝国! 当前个人积分: {fmt_traffic(user.self_points)}\n\n"
     else:
-        # 老用户重新创建（注销后），重新发放初始积分
-        async with async_session() as session:
-            async with session.begin():
-                await add_traffic(session, user.id, cfg.initial_traffic)
-        welcome = f"已重新发放初始积分: {fmt_traffic(cfg.initial_traffic)}\n\n"
+        welcome = f"当前个人积分: {fmt_traffic(user.self_points)}\n\n"
 
     await _start_company_type_selection(message, state, welcome)
 
@@ -423,10 +418,10 @@ async def cb_upgrade(callback: types.CallbackQuery):
     all_pass = True
 
     # 积分
-    if company.total_funds >= cost:
-        checks.append(f"✅ 积分: {fmt_traffic(company.total_funds)} / {fmt_traffic(cost)}")
+    if company.cp_points >= cost:
+        checks.append(f"✅ 积分: {fmt_traffic(company.cp_points)} / {fmt_traffic(cost)}")
     else:
-        checks.append(f"❌ 积分: {fmt_traffic(company.total_funds)} / {fmt_traffic(cost)}")
+        checks.append(f"❌ 积分: {fmt_traffic(company.cp_points)} / {fmt_traffic(cost)}")
         all_pass = False
 
     # 员工
@@ -570,7 +565,7 @@ async def cmd_rename(message: types.Message):
                 await message.answer("❌ 公司不存在")
                 return
 
-            rename_cost = max(RENAME_MIN_COST, int(company.total_funds * RENAME_COST_RATE))
+            rename_cost = max(RENAME_MIN_COST, int(company.cp_points * RENAME_COST_RATE))
             ok = await add_funds(session, company_id, -rename_cost)
             if not ok:
                 await message.answer(f"❌ 公司资金不足，改名需要 {fmt_traffic(rename_cost)}")
@@ -643,7 +638,7 @@ async def cmd_dissolve(message: types.Message):
                 await session.delete(company)
 
             # 清空个人积分
-            user.traffic = 0
+            user.self_points = 0
             user.reputation = 0
             await session.flush()
 

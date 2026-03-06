@@ -11,7 +11,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from db.engine import async_session
 from keyboards.menus import tag_kb
 from services.company_service import get_companies_by_owner, get_company_by_id
-from services.user_service import get_user_by_tg_id
+from services.user_service import add_self_points_by_tg_id, get_self_points, get_user_by_tg_id
 from utils.formatters import fmt_traffic
 
 router = Router()
@@ -155,21 +155,18 @@ async def on_total_war_mention(message: types.Message):
         target_info.sort(key=lambda x: x[1], reverse=True)
 
     # Calculate costs
-    fund_cost = int(my_company.total_funds * WAR_FUND_RATE)
+    fund_cost = int(my_company.cp_points * WAR_FUND_RATE)
     fund_cost = max(2000, fund_cost)  # minimum 2000
 
-    # Check points
-    from services.user_service import add_points
-    from cache.redis_client import get_redis
-    r = await get_redis()
-    current_points = int(await r.get(f"points:{tg_id}") or 0)
+    # Check personal points
+    current_points = await get_self_points(tg_id)
 
     # Build warning panel
     lines = [
         "⚔️🔥 全面商战 — 终极宣战 🔥⚔️",
         f"{'─' * 28}",
         f"🏢 {my_company.name}  战力: {my_power:,.0f}",
-        f"💰 积分: {fmt_traffic(my_company.total_funds)}",
+        f"💰 积分: {fmt_traffic(my_company.cp_points)}",
         f"👷 员工: {my_company.employee_count}人",
         f"{'─' * 28}",
         f"🎯 宣战对象: {len(targets)} 家公司",
@@ -203,11 +200,11 @@ async def on_total_war_mention(message: types.Message):
         f"{'─' * 28}",
     ])
 
-    can_afford = current_points >= WAR_POINT_COST and my_company.total_funds >= fund_cost
+    can_afford = current_points >= WAR_POINT_COST and my_company.cp_points >= fund_cost
     if not can_afford:
         if current_points < WAR_POINT_COST:
             lines.append(f"❌ 积分不足！需要 {WAR_POINT_COST}，当前 {current_points}")
-        if my_company.total_funds < fund_cost:
+        if my_company.cp_points < fund_cost:
             lines.append(f"❌ 积分不足！需要 {fmt_traffic(fund_cost)}")
 
     buttons = []
@@ -258,29 +255,27 @@ async def cb_total_war_confirm(callback: types.CallbackQuery):
                     await callback.message.edit_text(f"⏳ 冷却中，还需 {cd_ttl // 60} 分钟")
                     return
 
-                # Consume points
-                lua = """
-local key = KEYS[1]
-local amount = tonumber(ARGV[1])
-local current = tonumber(redis.call('GET', key) or '0')
-if current < amount then
-    return 0
-end
-redis.call('DECRBY', key, amount)
-return 1
-"""
-                ok = await r.eval(lua, 1, f"points:{tg_id}", WAR_POINT_COST)
-                if int(ok) != 1:
+                # Consume personal points
+                ok = await add_self_points_by_tg_id(
+                    tg_id,
+                    -WAR_POINT_COST,
+                    reason="total_war_consume",
+                )
+                if not ok:
                     await callback.message.edit_text(f"❌ 积分不足，需要 {WAR_POINT_COST}")
                     return
 
                 # Consume company funds
-                fund_cost = max(2000, int(my_company.total_funds * WAR_FUND_RATE))
+                fund_cost = max(2000, int(my_company.cp_points * WAR_FUND_RATE))
                 from services.company_service import add_funds
                 fund_ok = await add_funds(session, company_id, -fund_cost)
                 if not fund_ok:
-                    # Refund points
-                    await r.incrby(f"points:{tg_id}", WAR_POINT_COST)
+                    # Refund personal points
+                    await add_self_points_by_tg_id(
+                        tg_id,
+                        WAR_POINT_COST,
+                        reason="total_war_refund_fund_failed",
+                    )
                     await callback.message.edit_text("❌ 公司积分不足")
                     return
 
@@ -293,7 +288,11 @@ return 1
                 if not targets:
                     # Refund
                     await add_funds(session, company_id, fund_cost)
-                    await r.incrby(f"points:{tg_id}", WAR_POINT_COST)
+                    await add_self_points_by_tg_id(
+                        tg_id,
+                        WAR_POINT_COST,
+                        reason="total_war_refund_no_targets",
+                    )
                     await callback.message.edit_text("❌ 没有可宣战的公司")
                     return
 

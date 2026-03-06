@@ -42,7 +42,7 @@ from config import settings
 from db.engine import async_session
 from keyboards.menus import main_menu_kb, tag_kb
 from services.company_service import get_companies_by_owner
-from services.user_service import get_or_create_user, get_points
+from services.user_service import get_or_create_user
 from utils.formatters import fmt_traffic, compact_number
 from utils.panel_owner import mark_panel
 
@@ -134,13 +134,13 @@ async def cmd_start(message: types.Message):
         async with session.begin():
             user, created = await get_or_create_user(session, tg_id, tg_name)
             user_id = user.id
-            traffic = user.traffic
+            self_points = user.self_points
             reputation = user.reputation
 
     if created:
         sent = await message.reply(
             f"欢迎加入 商业帝国!\n"
-            f"已发放初始积分: {fmt_traffic(settings.initial_traffic)}\n\n"
+            f"当前个人积分: {fmt_traffic(self_points)}\n\n"
             f"使用下方菜单开始游戏:",
             reply_markup=main_menu_kb(tg_id=tg_id),
         )
@@ -177,19 +177,16 @@ async def cb_menu_profile(callback: types.CallbackQuery):
             await callback.answer("请先 /cp_create 创建公司", show_alert=True)
             return
         companies = await get_companies_by_owner(session, user.id)
-        traffic = user.traffic
+        self_points = user.self_points
         reputation = user.reputation
-
-    points = await get_points(tg_id)
 
     company_names = ", ".join(c.name for c in companies) if companies else "无"
 
     text = (
         f"📊 个人面板 — {callback.from_user.full_name}\n"
         f"{'─' * 24}\n"
-        f"💰 积分: {fmt_traffic(traffic)}\n"
+        f"💰 积分: {fmt_traffic(self_points)}\n"
         f"⭐ 声望: {reputation}\n"
-        f"🎁 荣誉点: {points:,}\n"
         f"🏢 公司: {company_names}\n"
     )
 

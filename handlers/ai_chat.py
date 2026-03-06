@@ -19,7 +19,7 @@ from services.ai_chat_service import ask_ai_smart, detect_image_intent
 from db.engine import async_session
 from db.models import CompanyOperationProfile
 from services.company_service import get_companies_by_owner, get_company_type_info, get_level_info
-from services.user_service import get_user_by_tg_id, get_points
+from services.user_service import get_user_by_tg_id
 
 router = Router()
 
@@ -69,11 +69,10 @@ async def _build_user_company_context(tg_id: int) -> str:
 
         companies = await get_companies_by_owner(session, user.id)
         if not companies:
-            points = await get_points(tg_id)
             return (
                 f"用户: {user.tg_name}\n"
+                f"个人积分: {user.self_points:,}\n"
                 f"声望: {user.reputation}\n"
-                f"荣誉点: {points:,}\n"
                 "公司: 暂无"
             )
 
@@ -81,8 +80,6 @@ async def _build_user_company_context(tg_id: int) -> str:
         type_info = get_company_type_info(company.company_type) or {}
         level_info = get_level_info(company.level) or {}
         op = await session.get(CompanyOperationProfile, company.id)
-        points = await get_points(tg_id)
-
         type_name = type_info.get("name", company.company_type)
         level_name = level_info.get("name", "未知等级")
         ethics = op.ethics if op else 60
@@ -91,12 +88,12 @@ async def _build_user_company_context(tg_id: int) -> str:
 
         return (
             f"用户: {user.tg_name}\n"
+            f"个人积分: {user.self_points:,}\n"
             f"声望: {user.reputation}\n"
-            f"荣誉点: {points:,}\n"
             f"公司: {company.name}\n"
             f"行业: {type_name}\n"
             f"等级: Lv.{company.level} {level_name}\n"
-            f"积分余额: {company.total_funds:,} 积分\n"
+            f"积分余额: {company.cp_points:,} 积分\n"
             f"日营收: {company.daily_revenue:,} 积分\n"
             f"员工: {company.employee_count}\n"
             f"道德: {ethics}/100\n"

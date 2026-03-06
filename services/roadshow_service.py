@@ -12,7 +12,7 @@ from cache.redis_client import get_redis
 from config import settings
 from db.models import Roadshow
 from services.company_service import add_funds
-from services.user_service import add_points, add_reputation
+from services.user_service import add_self_points, add_reputation
 from utils.formatters import fmt_traffic
 
 ROADSHOW_TYPES = ["技术展会", "投资峰会", "媒体发布会", "行业论坛"]
@@ -20,10 +20,10 @@ ROADSHOW_DAILY_KEY_PREFIX = "roadshow_daily"
 ROADSHOW_PENALTY_KEY_PREFIX = "roadshow_penalty"
 
 REWARD_TABLE = [
-    {"weight": 30, "type": "traffic", "min": 200, "max": 800},
+    {"weight": 30, "type": "cp_points", "min": 200, "max": 800},
     {"weight": 25, "type": "reputation", "min": 3, "max": 15},
-    {"weight": 20, "type": "traffic", "min": 500, "max": 2000},
-    {"weight": 15, "type": "points", "min": 10, "max": 50},
+    {"weight": 20, "type": "cp_points", "min": 500, "max": 2000},
+    {"weight": 15, "type": "self_points", "min": 10, "max": 50},
     {"weight": 10, "type": "jackpot", "min": 2000, "max": 5000},
 ]
 
@@ -56,9 +56,9 @@ STORIES_JACKPOT = [
 ]
 
 STORIES_BY_TYPE = {
-    "traffic": STORIES_TRAFFIC,
+    "cp_points": STORIES_TRAFFIC,
     "reputation": STORIES_REPUTATION,
-    "points": STORIES_POINTS,
+    "self_points": STORIES_POINTS,
     "jackpot": STORIES_JACKPOT,
 }
 
@@ -164,9 +164,9 @@ async def _build_satire_result(company_id: int, rs_type: str) -> tuple[str, floa
 
 def _normal_score_by_reward(reward_type: str) -> int:
     ranges = {
-        "traffic": (64, 92),
+        "cp_points": (64, 92),
         "reputation": (72, 96),
-        "points": (58, 84),
+        "self_points": (58, 84),
         "jackpot": (90, 100),
     }
     low, high = ranges.get(reward_type, (60, 90))
@@ -221,7 +221,7 @@ async def do_roadshow(
         )
 
         reward_line = ""
-        if reward["type"] in {"traffic", "jackpot"}:
+        if reward["type"] in {"cp_points", "jackpot"}:
             await add_funds(session, company_id, amount)
             bonus = amount
             reward_line = f"💵 积分 +{fmt_traffic(amount)}"
@@ -229,8 +229,8 @@ async def do_roadshow(
             await add_reputation(session, owner_user_id, amount)
             rep_gained = amount
             reward_line = f"⭐ 声望 +{amount}"
-        elif reward["type"] == "points":
-            await add_points(owner_user_id, amount, session=session)
+        elif reward["type"] == "self_points":
+            await add_self_points(owner_user_id, amount, session=session)
             reward_line = f"🏅 积分 +{amount}"
 
         if rs_multiplier > 1.0:
@@ -239,7 +239,7 @@ async def do_roadshow(
         base_rep = 2
         await add_reputation(session, owner_user_id, base_rep)
         rep_gained += base_rep
-        await add_points(owner_user_id, 3, session=session)
+        await add_self_points(owner_user_id, 3, session=session)
 
         result_text = (
             f"🎤 《{rs_type}》路演现场\n"

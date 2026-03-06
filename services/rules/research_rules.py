@@ -220,10 +220,10 @@ async def check_research_funds(
     company = await session.get(Company, company_id)
     if not company:
         return None
-    if company.total_funds < research_cost:
+    if company.cp_points < research_cost:
         return RuleViolation(
             code="INSUFFICIENT_FUNDS",
-            actual=company.total_funds,
+            actual=company.cp_points,
             expected=research_cost,
             message=f"公司积分不足，需要 {fmt_traffic(research_cost)}",
         )
