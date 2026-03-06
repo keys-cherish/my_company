@@ -14,11 +14,8 @@ from commands import (
     CMD_COOPERATE,
     CMD_COMPANY,
     CMD_CREATE_COMPANY,
-<<<<<<< HEAD
     CMD_DEMON,
-=======
     CMD_DIVIDEND,
->>>>>>> bbe157905e8d819c6fa6d4da5d4964ccaf975115
     CMD_DISSOLVE,
     CMD_EXCHANGE,
     CMD_GIVE_MONEY,
@@ -99,11 +96,7 @@ HELP_TEXT = (
     "📦 /cp_new_product <模板key> [自定义名称]\n"
     "  仅可创建已通过科研解锁的产品模板\n"
     "  可不填自定义名称，不填则使用模板默认名\n\n"
-<<<<<<< HEAD
     "😈 /cp_demon [金额] — 快速打开恶魔轮盘赌（可直接带赌注入场）\n\n"
-    "👷 /company_member add|minus <数量|max>\n"
-    "/company_invest <积分> - reply target user to invest and gain shares\n"
-=======
     "👷 /cp_member add|minus <数量|max>\n"
     "/cp_rename <新名字> — 公司改名\n"
     "/cp_invest <积分> - reply target user to invest and gain shares\n"
@@ -111,7 +104,6 @@ HELP_TEXT = (
     "/cp_transfer <金额> — 回复目标进行个人转账\n"
     "/cp_log [user|company] — 资金流水\n"
     "/cp_exchange — 交易所（商城/黑市）\n"
->>>>>>> bbe157905e8d819c6fa6d4da5d4964ccaf975115
     "Reply shortcut: invest5000 (must reply target message)\n"
     "🗑 /cp_dissolve — 注销公司(24h冷却)\n"
     "/cp_cancel — 取消当前输入流程\n"

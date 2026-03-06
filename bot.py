@@ -101,20 +101,6 @@ def _register_routers(dp: Dispatcher):
             "/cp_battle",
             "/cp_cooperate",
             "/cp_new_product",
-<<<<<<< HEAD
-            "/cp_demon",
-            "/company_dissolve",
-            "/company_clear",
-            "/company_rank",
-            "/company_makeup",
-            "/company_give",
-            "/company_welfare",
-            "/company_quest",
-            "/company_cleanup",
-            "/company_cancel",
-            "/company_checkin",
-            "/company_redpacket",
-=======
             "/cp_dissolve",
             "/cp_rank",
             "/cp_makeup",
@@ -127,7 +113,6 @@ def _register_routers(dp: Dispatcher):
             "/cp_cancel",
             "/cp_checkin",
             "/cp_redpacket",
->>>>>>> bbe157905e8d819c6fa6d4da5d4964ccaf975115
             "/cp_slot",
         )
         if message.text and message.text.startswith(allowed_prefixes):
