@@ -24,8 +24,11 @@ GAME_SYSTEM_PROMPT = (
     "当用户提问不完整时，先给最稳妥方案，再给最多2个可选策略。"
     "不编造未确认事实；不确定时明确说明并建议如何验证。"
     "你可以使用提供的工具帮用户查询游戏数据或执行游戏操作。"
-    "涉及商战(/cp_battle)、合作(/cp_cooperate)、投资(/cp_invest)等需要指定目标玩家的操作，"
+    "你可以执行的操作包括：查看信息(个人/公司/排行/产品/科研/地产/任务/流水)、"
+    "创建公司、升级公司、改名、雇佣/裁员、创建产品、开始研发、购买地产、分红、打卡、老虎机。"
+    "涉及商战(/cp_battle)、合作(/cp_cooperate)、投资(/cp_invest)、转账(/cp_transfer)等需要指定目标玩家的操作，"
     "请告诉用户回复目标消息并使用对应命令。"
+    "恶魔轮盘赌(/cp_demon)和发红包(/cp_redpacket)也需要用户手动在群里发起。"
 )
 
 GENERAL_SYSTEM_PROMPT = (
@@ -207,6 +210,52 @@ GAME_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "create_company",
+            "description": "为用户创建一家新公司",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "公司名称"},
+                    "company_type": {
+                        "type": "string",
+                        "enum": [
+                            "tech", "finance", "media", "manufacturing",
+                            "realestate", "biotech", "gaming", "consulting",
+                        ],
+                        "description": "公司类型: tech=科技, finance=金融, media=传媒, "
+                                       "manufacturing=制造, realestate=地产, biotech=生物科技, "
+                                       "gaming=游戏, consulting=咨询",
+                    },
+                },
+                "required": ["name", "company_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "upgrade_company",
+            "description": "升级公司到下一等级，需满足积分、员工、产品等条件",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rename_company",
+            "description": "公司改名，需要花费资金，有冷却时间",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "new_name": {"type": "string", "description": "新公司名称(2-16字)"},
+                },
+                "required": ["new_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "hire_employees",
             "description": "为公司雇佣员工，需支付招聘费用",
             "parameters": {
@@ -241,33 +290,112 @@ GAME_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "create_company",
-            "description": "为用户创建一家新公司",
+            "name": "create_product",
+            "description": "创建新产品。需指定产品名和投资金额，AI会评估产品方案打分决定品质和收入",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "公司名称"},
-                    "company_type": {
-                        "type": "string",
-                        "enum": [
-                            "tech", "finance", "media", "manufacturing",
-                            "realestate", "biotech", "gaming", "consulting",
-                        ],
-                        "description": "公司类型: tech=科技, finance=金融, media=传媒, "
-                                       "manufacturing=制造, realestate=地产, biotech=生物科技, "
-                                       "gaming=游戏, consulting=咨询",
-                    },
+                    "name": {"type": "string", "description": "产品名称(1-32字)"},
+                    "investment": {"type": "integer", "description": "投资金额(积分)，越多品质越高"},
                 },
-                "required": ["name", "company_type"],
+                "required": ["name", "investment"],
             },
         },
     },
     {
         "type": "function",
         "function": {
-            "name": "upgrade_company",
-            "description": "升级公司到下一等级，需满足积分、员工、产品等条件",
+            "name": "view_products",
+            "description": "查看公司产品列表和收入详情",
             "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "view_research",
+            "description": "查看已完成科研、进行中科研、可研发科技列表",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "start_research",
+            "description": "开始研发一项科技，需消耗积分并等待研发完成",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tech_id": {"type": "string", "description": "科技ID（从view_research结果中获取）"},
+                },
+                "required": ["tech_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "daily_checkin",
+            "description": "每日打卡签到，连续签到奖励递增",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "company_dividend",
+            "description": "公司分红，按股份比例分配给所有股东",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "amount": {"type": "integer", "description": "分红总额(积分)"},
+                },
+                "required": ["amount"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "view_fund_log",
+            "description": "查看公司或个人的资金流水记录",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "log_type": {
+                        "type": "string",
+                        "enum": ["company", "user"],
+                        "description": "日志类型: company=公司流水, user=个人流水",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "view_realestate",
+            "description": "查看公司地产列表和收入详情",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "buy_realestate",
+            "description": "购买地产，每日产生被动收入",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "building_key": {
+                        "type": "string",
+                        "enum": ["office_building", "shopping_mall", "tech_park", "data_center", "landmark_tower"],
+                        "description": "地产类型: office_building=写字楼, shopping_mall=购物中心, tech_park=科技园区, data_center=数据中心, landmark_tower=地标大厦",
+                    },
+                },
+                "required": ["building_key"],
+            },
         },
     },
     {
@@ -542,6 +670,290 @@ async def _exec_play_slot(tg_id: int) -> str:
     return await do_spin(tg_id)
 
 
+async def _exec_create_product(tg_id: int, name: str, investment: int) -> str:
+    from db.engine import async_session
+    from services.user_service import get_user_by_tg_id
+    from services.company_service import get_companies_by_owner, update_daily_revenue
+    from services.product_service import create_product
+
+    async with async_session() as session:
+        async with session.begin():
+            user = await get_user_by_tg_id(session, tg_id)
+            if not user:
+                return "用户未注册。"
+            companies = await get_companies_by_owner(session, user.id)
+            if not companies:
+                return "你还没有公司。"
+            company = companies[0]
+            product, msg = await create_product(session, company.id, user.id, name, investment)
+            if product:
+                await update_daily_revenue(session, company.id)
+    return msg
+
+
+async def _exec_view_products(tg_id: int) -> str:
+    from db.engine import async_session
+    from services.user_service import get_user_by_tg_id
+    from services.company_service import get_companies_by_owner
+    from services.product_service import get_company_products
+
+    async with async_session() as session:
+        user = await get_user_by_tg_id(session, tg_id)
+        if not user:
+            return "用户未注册。"
+        companies = await get_companies_by_owner(session, user.id)
+        if not companies:
+            return "你还没有公司。"
+        company = companies[0]
+        products = await get_company_products(session, company.id)
+
+    if not products:
+        return f"「{company.name}」暂无产品。使用 /cp_new_product <名称> <投资额> 创建产品。"
+
+    lines = [f"「{company.name}」产品列表:"]
+    for p in products:
+        lines.append(f"  - {p.name} v{p.version} | 日收入:{p.daily_income:,} | 品质:{p.quality}")
+    return "\n".join(lines)
+
+
+async def _exec_view_research(tg_id: int) -> str:
+    from db.engine import async_session
+    from services.user_service import get_user_by_tg_id
+    from services.company_service import get_companies_by_owner
+    from services.research_service import (
+        get_completed_techs,
+        get_in_progress_research,
+        get_available_techs,
+        sync_research_progress_if_due,
+    )
+
+    async with async_session() as session:
+        user = await get_user_by_tg_id(session, tg_id)
+        if not user:
+            return "用户未注册。"
+        companies = await get_companies_by_owner(session, user.id)
+        if not companies:
+            return "你还没有公司。"
+        company = companies[0]
+        await sync_research_progress_if_due(session, company.id)
+        completed = await get_completed_techs(session, company.id)
+        in_progress = await get_in_progress_research(session, company.id)
+        available = await get_available_techs(session, company.id)
+
+    lines = [f"「{company.name}」科研状态:"]
+    lines.append(f"已完成({len(completed)}项): {', '.join(completed) if completed else '无'}")
+
+    if in_progress:
+        lines.append("进行中:")
+        for r in in_progress:
+            lines.append(f"  - {r.tech_id} (进度: {r.progress}%)")
+
+    if available:
+        lines.append("可研发:")
+        for t in available:
+            dur_h = t.get("effective_duration_seconds", 3600) // 3600
+            lines.append(f"  - {t['tech_id']}: {t.get('name', '')} | 费用:{t.get('research_cost', 0):,} | 时长:{dur_h}小时")
+    else:
+        lines.append("暂无可研发科技。")
+
+    return "\n".join(lines)
+
+
+async def _exec_start_research(tg_id: int, tech_id: str) -> str:
+    from db.engine import async_session
+    from services.user_service import get_user_by_tg_id
+    from services.company_service import get_companies_by_owner
+    from services.research_service import start_research
+
+    async with async_session() as session:
+        async with session.begin():
+            user = await get_user_by_tg_id(session, tg_id)
+            if not user:
+                return "用户未注册。"
+            companies = await get_companies_by_owner(session, user.id)
+            if not companies:
+                return "你还没有公司。"
+            company = companies[0]
+            ok, msg = await start_research(session, company.id, user.id, tech_id)
+    return msg
+
+
+async def _exec_daily_checkin(tg_id: int) -> str:
+    from services.checkin_service import do_checkin
+    ok, msg, _ = await do_checkin(tg_id)
+    return msg
+
+
+async def _exec_company_dividend(tg_id: int, amount: int) -> str:
+    from db.engine import async_session
+    from services.user_service import get_user_by_tg_id
+    from services.company_service import get_companies_by_owner
+    from services.dividend_service import distribute_dividends
+
+    if amount <= 0:
+        return "分红金额必须大于0。"
+
+    async with async_session() as session:
+        async with session.begin():
+            user = await get_user_by_tg_id(session, tg_id)
+            if not user:
+                return "用户未注册。"
+            companies = await get_companies_by_owner(session, user.id)
+            if not companies:
+                return "你还没有公司。"
+            company = companies[0]
+            if company.owner_id != user.id:
+                return "只有公司老板才能分红。"
+            if company.total_funds < amount:
+                return f"公司积分不足，当前: {company.total_funds:,}，需要: {amount:,}"
+            distributions = await distribute_dividends(session, company, amount)
+
+    if not distributions:
+        return "分红失败，可能没有股东或金额不足。"
+    lines = [f"「{company.name}」分红 {amount:,} 积分:"]
+    for uid, share in distributions:
+        lines.append(f"  - 用户#{uid}: +{share:,}")
+    return "\n".join(lines)
+
+
+async def _exec_view_fund_log(tg_id: int, log_type: str) -> str:
+    from db.engine import async_session
+    from services.user_service import get_user_by_tg_id
+    from services.company_service import get_companies_by_owner
+    from services.fundlog_service import get_fund_logs
+
+    async with async_session() as session:
+        user = await get_user_by_tg_id(session, tg_id)
+        if not user:
+            return "用户未注册。"
+
+        if log_type == "company":
+            companies = await get_companies_by_owner(session, user.id)
+            if not companies:
+                return "你还没有公司。"
+            logs = await get_fund_logs("company", companies[0].id, limit=10)
+            title = f"「{companies[0].name}」公司流水(最近10条)"
+        else:
+            logs = await get_fund_logs("user", user.id, limit=10)
+            title = "个人流水(最近10条)"
+
+    if not logs:
+        return f"{title}: 暂无记录"
+    lines = [title]
+    for log in logs:
+        sign = "+" if log["amount"] > 0 else ""
+        lines.append(f"  {sign}{log['amount']:,} | {log.get('reason', '')} | 余额:{log.get('balance_after', 0):,}")
+    return "\n".join(lines)
+
+
+async def _exec_view_realestate(tg_id: int) -> str:
+    from db.engine import async_session
+    from services.user_service import get_user_by_tg_id
+    from services.company_service import get_companies_by_owner
+    from services.realestate_service import (
+        get_company_estates,
+        get_building_list,
+        get_building_info,
+    )
+
+    async with async_session() as session:
+        user = await get_user_by_tg_id(session, tg_id)
+        if not user:
+            return "用户未注册。"
+        companies = await get_companies_by_owner(session, user.id)
+        if not companies:
+            return "你还没有公司。"
+        company = companies[0]
+        estates = await get_company_estates(session, company.id)
+
+    lines = [f"「{company.name}」地产:"]
+    if estates:
+        total_income = 0
+        for e in estates:
+            bld = get_building_info(e.building_type)
+            name = bld["name"] if bld else e.building_type
+            lines.append(f"  - {name} Lv.{e.level} | 日收入:{e.daily_dividend:,}")
+            total_income += e.daily_dividend
+        lines.append(f"总地产日收入: {total_income:,}")
+    else:
+        lines.append("  暂无地产。")
+
+    lines.append("可购买:")
+    for b in get_building_list():
+        lines.append(f"  - {b['key']}: {b['name']} | 价格:{b['purchase_price']:,} | 日收入:{b['daily_dividend']:,}")
+    return "\n".join(lines)
+
+
+async def _exec_buy_realestate(tg_id: int, building_key: str) -> str:
+    from db.engine import async_session
+    from services.user_service import get_user_by_tg_id
+    from services.company_service import get_companies_by_owner
+    from services.realestate_service import purchase_building
+
+    async with async_session() as session:
+        async with session.begin():
+            user = await get_user_by_tg_id(session, tg_id)
+            if not user:
+                return "用户未注册。"
+            companies = await get_companies_by_owner(session, user.id)
+            if not companies:
+                return "你还没有公司。"
+            company = companies[0]
+            if company.owner_id != user.id:
+                return "只有公司老板才能购买地产。"
+            ok, msg = await purchase_building(session, company.id, tg_id, building_key)
+    return msg
+
+
+async def _exec_rename_company(tg_id: int, new_name: str) -> str:
+    from db.engine import async_session
+    from sqlalchemy import select
+    from cache.redis_client import get_redis
+    from services.user_service import get_user_by_tg_id
+    from services.company_service import get_companies_by_owner, add_funds
+    from db.models import Company
+    from utils.validators import validate_name
+
+    name_err = validate_name(new_name, min_len=2, max_len=16)
+    if name_err:
+        return f"名称无效: {name_err}"
+
+    async with async_session() as session:
+        user = await get_user_by_tg_id(session, tg_id)
+        if not user:
+            return "用户未注册。"
+        companies = await get_companies_by_owner(session, user.id)
+        if not companies:
+            return "你还没有公司。"
+        company = companies[0]
+        company_id = company.id
+
+    r = await get_redis()
+    cd_ttl = await r.ttl(f"rename_cd:{company_id}")
+    if cd_ttl and cd_ttl > 0:
+        return f"改名冷却中，剩余 {cd_ttl // 3600}小时{(cd_ttl % 3600) // 60}分钟"
+
+    async with async_session() as session:
+        async with session.begin():
+            exists = await session.execute(select(Company).where(Company.name == new_name))
+            if exists.scalar_one_or_none():
+                return "该名称已被使用，请换一个。"
+            company = await session.get(Company, company_id)
+            if not company:
+                return "公司不存在。"
+            rename_cost = max(5000, int(company.total_funds * 0.05))
+            ok = await add_funds(session, company_id, -rename_cost)
+            if not ok:
+                return f"公司资金不足，改名需要 {rename_cost:,} 积分"
+            old_name = company.name
+            company.name = new_name
+            await session.flush()
+
+    await r.setex(f"rename_cd:{company_id}", 86400, "1")
+    await r.setex(f"rename_penalty:{company_id}", 3 * 86400, "1")
+    return f"公司改名成功: 「{old_name}」→「{new_name}」，花费 {rename_cost:,} 积分"
+
+
 async def execute_tool(name: str, args: dict, tg_id: int) -> str:
     """Dispatch tool call to the corresponding function."""
     try:
@@ -563,6 +975,26 @@ async def execute_tool(name: str, args: dict, tg_id: int) -> str:
             )
         elif name == "upgrade_company":
             return await _exec_upgrade_company(tg_id)
+        elif name == "rename_company":
+            return await _exec_rename_company(tg_id, args.get("new_name", ""))
+        elif name == "create_product":
+            return await _exec_create_product(tg_id, args.get("name", ""), args.get("investment", 0))
+        elif name == "view_products":
+            return await _exec_view_products(tg_id)
+        elif name == "view_research":
+            return await _exec_view_research(tg_id)
+        elif name == "start_research":
+            return await _exec_start_research(tg_id, args.get("tech_id", ""))
+        elif name == "daily_checkin":
+            return await _exec_daily_checkin(tg_id)
+        elif name == "company_dividend":
+            return await _exec_company_dividend(tg_id, args.get("amount", 0))
+        elif name == "view_fund_log":
+            return await _exec_view_fund_log(tg_id, args.get("log_type", "company"))
+        elif name == "view_realestate":
+            return await _exec_view_realestate(tg_id)
+        elif name == "buy_realestate":
+            return await _exec_buy_realestate(tg_id, args.get("building_key", ""))
         elif name == "view_quests":
             return await _exec_view_quests(tg_id)
         elif name == "play_slot":

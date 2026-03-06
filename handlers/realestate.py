@@ -9,12 +9,14 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from db.engine import async_session
 from keyboards.menus import tag_kb
+from config import settings
 from services.company_service import get_company_by_id
 from services.realestate_service import (
     MAX_BUILDING_LEVEL,
     calc_level_income,
     calc_upgrade_cost,
     count_company_building_type,
+    count_company_total_estates,
     get_building_info,
     get_building_list,
     get_company_estates,
@@ -28,7 +30,7 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 
-def _estate_list_kb(estates, buildings, company_id: int, tg_id: int, owned_counts: dict) -> InlineKeyboardMarkup:
+def _estate_list_kb(estates, buildings, company_id: int, tg_id: int, owned_counts: dict, total_count: int) -> InlineKeyboardMarkup:
     """Build the estate list keyboard with buy + upgrade buttons."""
     buttons = []
 
@@ -44,23 +46,24 @@ def _estate_list_kb(estates, buildings, company_id: int, tg_id: int, owned_count
                     callback_data=f"realestate:upg:{company_id}:{e.id}",
                 )])
 
-    # Buy buttons
-    for b in buildings:
-        owned = owned_counts.get(b["key"], 0)
-        max_c = b.get("max_count", 99)
-        if owned < max_c:
-            buttons.append([InlineKeyboardButton(
-                text=f"🏪 {b['name']} ({fmt_traffic(b['purchase_price'])}) [{owned}/{max_c}]",
-                callback_data=f"realestate:buy:{company_id}:{b['key']}",
-            )])
+    # Buy buttons (only if total limit not reached)
+    if total_count < settings.max_total_estates:
+        for b in buildings:
+            owned = owned_counts.get(b["key"], 0)
+            max_c = b.get("max_count", 99)
+            if owned < max_c:
+                buttons.append([InlineKeyboardButton(
+                    text=f"🏪 {b['name']} ({fmt_traffic(b['purchase_price'])}) [{owned}/{max_c}]",
+                    callback_data=f"realestate:buy:{company_id}:{b['key']}",
+                )])
 
     buttons.append([InlineKeyboardButton(text="🔙 返回公司", callback_data=f"company:view:{company_id}")])
     return tag_kb(InlineKeyboardMarkup(inline_keyboard=buttons), tg_id)
 
 
-async def _render_estate_list(company, estates, owned_counts: dict) -> str:
+async def _render_estate_list(company, estates, owned_counts: dict, total_count: int) -> str:
     """Render the estate list text."""
-    lines = [f"🏗 {company.name} — 地产", "─" * 24]
+    lines = [f"🏗 {company.name} — 地产 [{total_count}/{settings.max_total_estates}]", "─" * 24]
     if estates:
         # Sort by building type then level for consistent display
         sorted_estates = sorted(estates, key=lambda e: (e.building_type, e.level))
@@ -102,9 +105,10 @@ async def _refresh_estate_list(callback: types.CallbackQuery, company_id: int):
             owned_counts = {}
             for b in buildings:
                 owned_counts[b["key"]] = await count_company_building_type(session, company_id, b["key"])
+            total_count = await count_company_total_estates(session, company_id)
 
-        text = await _render_estate_list(company, estates, owned_counts)
-        kb = _estate_list_kb(estates, buildings, company_id, tg_id, owned_counts)
+        text = await _render_estate_list(company, estates, owned_counts, total_count)
+        kb = _estate_list_kb(estates, buildings, company_id, tg_id, owned_counts, total_count)
         await callback.message.edit_text(text, reply_markup=kb)
     except Exception:
         pass
@@ -162,9 +166,10 @@ async def cb_estate_list(callback: types.CallbackQuery, company_id: int | None =
         owned_counts = {}
         for b in buildings:
             owned_counts[b["key"]] = await count_company_building_type(session, company_id, b["key"])
+        total_count = await count_company_total_estates(session, company_id)
 
-    text = await _render_estate_list(company, estates, owned_counts)
-    kb = _estate_list_kb(estates, buildings, company_id, tg_id, owned_counts)
+    text = await _render_estate_list(company, estates, owned_counts, total_count)
+    kb = _estate_list_kb(estates, buildings, company_id, tg_id, owned_counts, total_count)
     await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
@@ -190,6 +195,7 @@ async def cb_buy_building(callback: types.CallbackQuery):
             await callback.answer("公司不存在", show_alert=True)
             return
         owned = await count_company_building_type(session, company_id, building_key)
+        total_count = await count_company_total_estates(session, company_id)
 
     max_c = bld.get("max_count", 99)
     roi_days = bld["purchase_price"] // bld["daily_dividend"] if bld["daily_dividend"] > 0 else 999
@@ -205,9 +211,12 @@ async def cb_buy_building(callback: types.CallbackQuery):
         f"⬆️ 可升级至 Lv.{MAX_BUILDING_LEVEL}（每级+50%基础收益）",
         f"{'─' * 24}",
         f"📦 已拥有：{owned}/{max_c}",
+        f"🏗 地产总数：{total_count}/{settings.max_total_estates}",
         f"🏦 公司积分：{fmt_traffic(company.total_funds)}",
     ]
-    if bld["purchase_price"] > company.total_funds:
+    if total_count >= settings.max_total_estates:
+        lines.append(f"❌ 地产总数已达上限（{settings.max_total_estates}栋）")
+    elif bld["purchase_price"] > company.total_funds:
         lines.append(f"❌ 积分不足！还差 {fmt_traffic(bld['purchase_price'] - company.total_funds)}")
 
     kb = tag_kb(InlineKeyboardMarkup(inline_keyboard=[

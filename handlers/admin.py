@@ -10,6 +10,7 @@ from aiogram.filters import Command
 from commands import (
     CMD_CLEANUP,
     CMD_COMPENSATE,
+    CMD_DEDUCT_MONEY,
     CMD_GIVE_MONEY,
     CMD_MAINTAIN,
     CMD_WELFARE,
@@ -279,6 +280,69 @@ async def cmd_give_money(message: types.Message):
             f"✅ 已向 {target.full_name} 发放 {fmt_currency(amount)}（个人钱包）\n"
             f"🎁 同步奖励积分: +{points_gain:,}（当前 {new_points:,}）"
         )
+
+
+@router.message(Command(CMD_DEDUCT_MONEY))
+async def cmd_deduct_money(message: types.Message):
+    """超管命令：回复某人并扣除其公司积分（最多扣到公司资金的1%）。"""
+    if not is_super_admin(message.from_user.id):
+        await message.answer("❌ 无权使用此命令")
+        return
+
+    args = (message.text or "").split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer("用法: 回复某人消息并发送 /cp_deduct <积分>")
+        return
+
+    if not message.reply_to_message or not message.reply_to_message.from_user:
+        await message.answer("用法: 回复某人消息并发送 /cp_deduct <积分>")
+        return
+
+    target = message.reply_to_message.from_user
+    if target.is_bot:
+        await message.answer("❌ 不能扣除机器人的积分")
+        return
+
+    amount_str = args[1].replace(",", "").replace("_", "").strip()
+    try:
+        amount = int(amount_str)
+    except ValueError:
+        await message.answer("❌ 积分必须是整数")
+        return
+
+    if amount <= 0:
+        await message.answer("❌ 积分必须大于 0")
+        return
+
+    async with async_session() as session:
+        async with session.begin():
+            user = await get_user_by_tg_id(session, target.id)
+            if not user:
+                await message.answer("❌ 目标用户未注册")
+                return
+
+            target_companies = await get_companies_by_owner(session, user.id)
+            if not target_companies:
+                await message.answer("❌ 目标用户没有公司，无法扣除")
+                return
+
+            target_company = target_companies[0]
+            # 最多扣到公司资金的99%，保留至少1%
+            max_deduct = int(target_company.total_funds * 0.99)
+            actual = min(amount, max_deduct)
+            if actual <= 0:
+                await message.answer(f"❌ 公司「{target_company.name}」资金不足，无法扣除")
+                return
+
+            ok = await add_funds(session, target_company.id, -actual)
+            if not ok:
+                await message.answer("❌ 扣除失败，请稍后重试")
+                return
+
+    await message.answer(
+        f"✅ 已从 {target.full_name} 的公司「{target_company.name}」扣除 {fmt_currency(actual)}\n"
+        f"{'⚠️ 达到上限，实际扣除 ' + fmt_currency(actual) if actual < amount else ''}"
+    )
 
 
 WELFARE_AMOUNT = 1_000_000

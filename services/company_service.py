@@ -139,11 +139,16 @@ async def add_funds(
         return False
     if amount < 0 and company.total_funds + amount < 0:
         return False
+    # Cap at max_company_funds
+    new_funds = min(company.total_funds + amount, settings.max_company_funds)
+    actual_amount = new_funds - company.total_funds
+    if actual_amount == 0:
+        return True
     old_ver = company.version
     result = await session.execute(
         update(Company)
         .where(Company.id == company_id, Company.version == old_ver)
-        .values(total_funds=Company.total_funds + amount, version=Company.version + 1)
+        .values(total_funds=new_funds, version=Company.version + 1)
     )
     if result.rowcount == 0:
         return False
@@ -155,7 +160,7 @@ async def add_funds(
     await log_fund_change(
         "company",
         company_id,
-        amount,
+        actual_amount,
         reason,
         balance_after=company.total_funds,
     )

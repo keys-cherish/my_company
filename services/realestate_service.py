@@ -8,6 +8,7 @@ from pathlib import Path
 from sqlalchemy import select, func as sqlfunc
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
 from db.models import RealEstate
 from services.company_service import add_funds
 from services.user_service import add_points
@@ -64,6 +65,16 @@ async def count_company_building_type(
     return result.scalar() or 0
 
 
+async def count_company_total_estates(
+    session: AsyncSession, company_id: int,
+) -> int:
+    """Count total number of estates a company owns (all types)."""
+    result = await session.execute(
+        select(sqlfunc.count()).where(RealEstate.company_id == company_id)
+    )
+    return result.scalar() or 0
+
+
 def calc_upgrade_cost(building_info: dict, current_level: int) -> int:
     """Calculate cost to upgrade from current_level to current_level+1."""
     base_price = building_info["purchase_price"]
@@ -97,6 +108,11 @@ async def purchase_building(
     current_count = await count_company_building_type(session, company_id, building_key)
     if current_count >= max_count:
         return False, f"「{bld['name']}」已达上限（{max_count}栋）"
+
+    # Check global estate limit
+    total_estates = await count_company_total_estates(session, company_id)
+    if total_estates >= settings.max_total_estates:
+        return False, f"地产总数已达上限（{settings.max_total_estates}栋）"
 
     ok = await add_funds(session, company_id, -price)
     if not ok:

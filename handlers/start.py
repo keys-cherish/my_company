@@ -14,6 +14,7 @@ from commands import (
     CMD_COOPERATE,
     CMD_COMPANY,
     CMD_CREATE_COMPANY,
+    CMD_DEDUCT_MONEY,
     CMD_DEMON,
     CMD_DIVIDEND,
     CMD_DISSOLVE,
@@ -56,7 +57,7 @@ BOT_COMMANDS = [
     BotCommand(command=CMD_RENAME, description="公司改名"),
     BotCommand(command=CMD_BATTLE, description="商战（回复+可选战术）"),
     BotCommand(command=CMD_COOPERATE, description="合作（回复/all）"),
-    BotCommand(command=CMD_NEW_PRODUCT, description="创建产品（模板key [名称]）"),
+    BotCommand(command=CMD_NEW_PRODUCT, description="创建产品（名称 投资金额）"),
     BotCommand(command=CMD_DEMON, description="😈 恶魔轮盘赌（可选赌注）"),
     BotCommand(command=CMD_MEMBER, description="员工管理（add/minus 数量）"),
     BotCommand(command=CMD_INVEST, description="注资（需回复目标）"),
@@ -69,6 +70,7 @@ BOT_COMMANDS = [
     BotCommand(command=CMD_HELP, description="帮助信息"),
     BotCommand(command=CMD_CANCEL, description="取消当前输入流程"),
     BotCommand(command=CMD_GIVE_MONEY, description="【超管】发放积分（回复）"),
+    BotCommand(command=CMD_DEDUCT_MONEY, description="【超管】扣除积分（回复）"),
     BotCommand(command=CMD_WELFARE, description="【超管】全服福利"),
     BotCommand(command=CMD_CLEANUP, description="【超管】清理残留数据"),
     BotCommand(command=CMD_MAKEUP, description="【超管】数据修复检查"),
@@ -93,9 +95,8 @@ HELP_TEXT = (
     "  战术: 稳扎稳打 / 激进营销 / 奇袭渗透\n"
     "🤝 /cp_cooperate — 回复某人/all 合作\n"
     "  每次+2%（上限50%），次日清空，双方各+30声望\n\n"
-    "📦 /cp_new_product <模板key> [自定义名称]\n"
-    "  仅可创建已通过科研解锁的产品模板\n"
-    "  可不填自定义名称，不填则使用模板默认名\n\n"
+    "📦 /cp_new_product <产品名> <投资金额>\n"
+    "  AI评估产品方案打分，投资越多品质越高\n\n"
     "😈 /cp_demon [金额] — 快速打开恶魔轮盘赌（可直接带赌注入场）\n\n"
     "👷 /cp_member add|minus <数量|max>\n"
     "/cp_rename <新名字> — 公司改名\n"
@@ -113,6 +114,7 @@ HELP_TEXT = (
     "🧧 /cp_redpacket <金额> <个数> — 发公司红包，群里抢！\n"
     "\n🔒 超管专用命令：\n"
     "/cp_give <积分> — 【超管】回复目标发放积分\n"
+    "/cp_deduct <积分> — 【超管】回复目标扣除积分\n"
     "/cp_welfare — 【超管】全服公司福利\n"
     "/cp_cleanup — 【超管】清理Redis/DB残留\n"
     "/cp_makeup — 【超管】数据修复检查\n"

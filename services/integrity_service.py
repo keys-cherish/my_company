@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import Company, Product
 
+from config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -189,6 +191,71 @@ async def cleanup_negative_funds(session: AsyncSession) -> list[str]:
     return msgs
 
 
+async def cleanup_excess_estates(session: AsyncSession) -> list[str]:
+    """Sell off cheapest estates when a company owns more than max_total_estates."""
+    from db.models import RealEstate
+
+    max_estates = settings.max_total_estates
+    msgs = []
+    result = await session.execute(select(Company))
+    companies = list(result.scalars().all())
+
+    for company in companies:
+        estates = list((await session.execute(
+            select(RealEstate)
+            .where(RealEstate.company_id == company.id)
+            .order_by(RealEstate.daily_dividend.asc())
+        )).scalars().all())
+
+        if len(estates) <= max_estates:
+            continue
+
+        to_remove = estates[:len(estates) - max_estates]
+        refund = 0
+        removed_names = []
+        for e in to_remove:
+            sell_price = e.purchase_price // 2
+            refund += sell_price
+            removed_names.append(f"{e.building_type} Lv.{e.level}")
+            await session.delete(e)
+
+        if refund > 0:
+            new_funds = min(company.total_funds + refund, settings.max_company_funds)
+            company.total_funds = new_funds
+
+        msg = (
+            f"⚠️ 「{company.name}」地产超过{max_estates}栋上限，"
+            f"自动卖出(保留高收益): {', '.join(removed_names)}，"
+            f"回收 {refund:,} 积分(半价)"
+        )
+        msgs.append(msg)
+        logger.warning(msg)
+
+    if msgs:
+        await session.flush()
+    return msgs
+
+
+async def cleanup_excess_funds(session: AsyncSession) -> list[str]:
+    """Cap company funds at max_company_funds."""
+    max_funds = settings.max_company_funds
+    msgs = []
+    result = await session.execute(
+        select(Company).where(Company.total_funds > max_funds)
+    )
+    over_companies = list(result.scalars().all())
+
+    for company in over_companies:
+        company.total_funds = max_funds
+        msg = f"⚠️ 「{company.name}」积分超过上限({max_funds:,})，已修正"
+        msgs.append(msg)
+        logger.warning(msg)
+
+    if msgs:
+        await session.flush()
+    return msgs
+
+
 async def backfill_company_anomalies(session: AsyncSession) -> list[str]:
     """Backfill and correct abnormal company core fields."""
     from config import settings
@@ -245,6 +312,9 @@ async def backfill_company_anomalies(session: AsyncSession) -> list[str]:
         if company.total_funds < 0:
             company.total_funds = 0
             fixed_funds += 1
+        elif company.total_funds > settings.max_company_funds:
+            company.total_funds = settings.max_company_funds
+            fixed_funds += 1
 
         if company.version < 1:
             company.version = 1
@@ -295,6 +365,8 @@ async def run_all_checks(session: AsyncSession | None = None) -> list[str]:
         ("孤立地产", cleanup_orphaned_realestate),
         ("孤立合作", cleanup_expired_cooperations),
         ("负数积分", cleanup_negative_funds),
+        ("地产超限", cleanup_excess_estates),
+        ("积分超限", cleanup_excess_funds),
     ]
     msgs = []
     for name, check_fn in checks:

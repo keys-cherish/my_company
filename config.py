@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     valuation_income_days: int = 30
     daily_operating_cost_pct: float = 0.07
     dividend_pct: float = 0.70
+    max_company_funds: int = 1_000_000_000  # 公司积分上限: 10亿
+    max_total_estates: int = 8  # 每家公司最多拥有的地产总数
 
     # Research
     base_research_cost: int = 2500
@@ -71,6 +73,9 @@ class Settings(BaseSettings):
     product_create_cost: int = 1500
     product_upgrade_cost_base: int = 800
     product_upgrade_income_pct: float = 0.20  # +20% per upgrade
+    product_min_investment: int = 1500  # 创建产品最低投资额
+    product_max_investment: int = 500_000  # 创建产品最高投资额
+    product_ai_income_rate: float = 0.08  # 日收入 = 投资额 * 品质/100 * 此系数
 
     # AI iterate (AI研发迭代)
     ai_rd_daily_limit: int = 5  # per company/day

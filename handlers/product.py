@@ -17,10 +17,8 @@ from cache.redis_client import get_redis
 from config import settings
 from services.product_service import (
     create_product,
-    get_available_product_templates,
     get_company_products,
     upgrade_product,
-    PRODUCT_CREATE_COST_GROWTH,
     MAX_PRODUCT_VERSION,
 )
 from services.user_service import get_user_by_tg_id
@@ -30,53 +28,29 @@ from utils.panel_owner import mark_panel
 router = Router()
 logger = logging.getLogger(__name__)
 
-def _format_new_product_usage(templates: list[dict]) -> str:
-    lines = [
-        "📦 用法: /cp_new_product <模板key> [自定义产品名]",
-        "例1: /cp_new_product social_app",
-        "例2: /cp_new_product social_app 超能社交",
-        "",
-    ]
-    if templates:
-        lines.append("🆕 当前可用模板:")
-        for t in templates:
-            lines.append(
-                f"  - {t['product_key']}: {t['name']} "
-                f"(基础日收入 {fmt_traffic(t['base_daily_income'])})"
-            )
-    else:
-        lines.append("💡 暂无可用模板，请先在【科研】中完成前置科技。")
-    return "\n".join(lines)
-
-
-def _resolve_template_choice(raw_choice: str, templates: list[dict]) -> tuple[dict | None, list[dict]]:
-    key = raw_choice.strip().lower()
-    if not key:
-        return None, []
-
-    exact = [
-        t for t in templates
-        if t["product_key"].lower() == key or str(t["name"]).strip().lower() == key
-    ]
-    if exact:
-        return exact[0], []
-
-    candidates = [
-        t for t in templates
-        if t["product_key"].lower().startswith(key) or str(t["name"]).strip().lower().startswith(key)
-    ]
-    if len(candidates) == 1:
-        return candidates[0], []
-    return None, candidates
-
 
 @router.message(Command(CMD_NEW_PRODUCT))
 async def cmd_new_product(message: types.Message):
-    """Create a product from unlocked templates: /cp_new_product <template_key> [custom_name]."""
+    """创建产品: /cp_new_product <产品名> <投资金额>"""
     tg_id = message.from_user.id
     parts = (message.text or "").split(maxsplit=2)
-    template_choice = parts[1].strip() if len(parts) >= 2 else ""
-    custom_name = parts[2].strip() if len(parts) >= 3 else ""
+
+    if len(parts) < 3:
+        await message.answer(
+            "📦 用法: /cp_new_product <产品名> <投资金额>\n"
+            f"例: /cp_new_product 超能社交 5000\n\n"
+            f"💰 投资范围: {fmt_traffic(settings.product_min_investment)} ~ "
+            f"{fmt_traffic(settings.product_max_investment)}\n"
+            "🤖 AI将根据产品名评估方案，投资越多、评分越高，日收入越高"
+        )
+        return
+
+    product_name = parts[1].strip()
+    try:
+        investment = int(parts[2].strip().replace(",", ""))
+    except ValueError:
+        await message.answer("❌ 投资金额必须是数字")
+        return
 
     async with async_session() as session:
         async with session.begin():
@@ -89,51 +63,13 @@ async def cmd_new_product(message: types.Message):
                 await message.answer("你还没有公司")
                 return
             company = companies[0]
-            templates = await get_available_product_templates(session, company.id)
-
-            if not templates:
-                await message.answer(
-                    "❌ 当前没有可创建的产品模板。\n"
-                    "请先前往【科研】完成前置科技后再创建产品。"
-                )
-                return
-
-            if not template_choice:
-                await message.answer(_format_new_product_usage(templates))
-                return
-
-            selected_template, candidates = _resolve_template_choice(template_choice, templates)
-            if selected_template is None and candidates:
-                options = "\n".join(
-                    f"  - {t['product_key']}: {t['name']}" for t in candidates
-                )
-                await message.answer(
-                    "❌ 模板匹配到多个候选，请使用更完整的模板key：\n"
-                    f"{options}"
-                )
-                return
-
-            if selected_template is None:
-                await message.answer(
-                    "❌ 未找到可用模板。\n"
-                    f"{_format_new_product_usage(templates)}"
-                )
-                return
-
             product, msg = await create_product(
-                session,
-                company.id,
-                user.id,
-                selected_template["product_key"],
-                custom_name=custom_name,
+                session, company.id, user.id, product_name, investment,
             )
             if product:
                 await update_daily_revenue(session, company.id)
-                extra = f"\n模板: {selected_template['product_key']} ({selected_template['name']})"
-                await message.answer(f"{msg}{extra}")
-                return
 
-            await message.answer(msg)
+    await message.answer(msg)
 
 
 async def _refresh_product_list(callback: types.CallbackQuery, company_id: int):
@@ -145,11 +81,6 @@ async def _refresh_product_list(callback: types.CallbackQuery, company_id: int):
             if not company:
                 return
             products = await get_company_products(session, company_id)
-            templates = await get_available_product_templates(session, company_id)
-
-        # Filter out templates that already have products
-        existing_tech_ids = {p.tech_id for p in products}
-        templates = [t for t in templates if t["tech_id"] not in existing_tech_ids]
 
         lines = [f"📦 {company.name} — 产品列表", "─" * 24]
 
@@ -168,22 +99,15 @@ async def _refresh_product_list(callback: types.CallbackQuery, company_id: int):
         else:
             lines.append("暂无产品")
 
-        if templates:
-            create_cost = max(
-                settings.product_create_cost,
-                int(settings.product_create_cost * (1 + len(products) * PRODUCT_CREATE_COST_GROWTH)),
-            )
-            lines.append(f"\n🆕 可创建的产品 (创建费💰{create_cost:,}):")
+        lines.append(
+            f"\n📦 创建产品命令:\n"
+            f"  /cp_new_product <产品名> <投资金额>\n"
+            f"  投资范围: {fmt_traffic(settings.product_min_investment)} ~ "
+            f"{fmt_traffic(settings.product_max_investment)}"
+        )
         text = "\n".join(lines)
 
-        template_buttons = [
-            [InlineKeyboardButton(
-                text=f"{t['name']} (收入{fmt_traffic(t['base_daily_income'])}/日)",
-                callback_data=f"product:create:{company_id}:{t['product_key']}",
-            )]
-            for t in templates
-        ]
-        all_buttons = product_buttons + template_buttons
+        all_buttons = product_buttons
         all_buttons.append([InlineKeyboardButton(text="🔙 返回", callback_data=f"company:view:{company_id}")])
         kb = tag_kb(InlineKeyboardMarkup(inline_keyboard=all_buttons), tg_id)
 
@@ -241,11 +165,6 @@ async def cb_product_list(callback: types.CallbackQuery, company_id: int | None 
             return
 
         products = await get_company_products(session, company_id)
-        templates = await get_available_product_templates(session, company_id)
-
-    # Filter out templates that already have products
-    existing_tech_ids = {p.tech_id for p in products}
-    templates = [t for t in templates if t["tech_id"] not in existing_tech_ids]
 
     lines = [f"📦 {company.name} — 产品列表", "─" * 24]
 
@@ -264,27 +183,14 @@ async def cb_product_list(callback: types.CallbackQuery, company_id: int | None 
     else:
         lines.append("暂无产品")
 
-    template_buttons = []
-    if templates:
-        create_cost = max(
-            settings.product_create_cost,
-            int(settings.product_create_cost * (1 + len(products) * PRODUCT_CREATE_COST_GROWTH)),
-        )
-        lines.append(f"\n🆕 可创建的产品 (创建费💰{create_cost:,}):")
-        template_buttons = [
-            [InlineKeyboardButton(
-                text=f"{t['name']} (收入{fmt_traffic(t['base_daily_income'])}/日)",
-                callback_data=f"product:create:{company_id}:{t['product_key']}",
-            )]
-            for t in templates
-        ]
-    else:
-        lines.append("\n💡 完成科研可解锁产品模板")
-
-    lines.append("\n📦 也可使用命令按模板创建产品:")
-    lines.append("  /cp_new_product <模板key> [自定义名称]")
+    lines.append(
+        f"\n📦 创建产品命令:\n"
+        f"  /cp_new_product <产品名> <投资金额>\n"
+        f"  投资范围: {fmt_traffic(settings.product_min_investment)} ~ "
+        f"{fmt_traffic(settings.product_max_investment)}"
+    )
     text = "\n".join(lines)
-    all_buttons = product_buttons + template_buttons
+    all_buttons = product_buttons
     all_buttons.append([InlineKeyboardButton(text="🔙 返回", callback_data=f"company:view:{company_id}")])
     kb = tag_kb(InlineKeyboardMarkup(inline_keyboard=all_buttons), callback.from_user.id)
 
@@ -299,32 +205,6 @@ async def cb_product_list(callback: types.CallbackQuery, company_id: int | None 
         await mark_panel(sent.chat.id, sent.message_id, callback.from_user.id)
 
     await callback.answer()
-
-@router.callback_query(F.data.startswith("product:create:"))
-async def cb_create_product(callback: types.CallbackQuery):
-    parts = callback.data.split(":")
-    company_id = int(parts[2])
-    product_key = parts[3]
-    tg_id = callback.from_user.id
-
-    async with async_session() as session:
-        async with session.begin():
-            user = await get_user_by_tg_id(session, tg_id)
-            if not user:
-                await callback.answer("请先 /cp_create 创建公司", show_alert=True)
-                return
-            company = await get_company_by_id(session, company_id)
-            if not company or company.owner_id != user.id:
-                await callback.answer("只有公司老板才能创建产品", show_alert=True)
-                return
-            product, msg = await create_product(session, company_id, user.id, product_key)
-            if product:
-                await update_daily_revenue(session, company_id)
-
-    await callback.answer(msg, show_alert=True)
-    if product:
-        await _refresh_product_list(callback, company_id)
-
 
 @router.callback_query(F.data.startswith("product:upgrade:"))
 async def cb_upgrade_product(callback: types.CallbackQuery):
