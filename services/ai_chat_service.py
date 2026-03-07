@@ -26,8 +26,8 @@ GAME_SYSTEM_PROMPT = (
     "\n\n## 关键规则：工具调用\n"
     "当用户请求执行操作（如签到、路演、创建产品、升级、雇佣、分红、查看信息等），"
     "你**必须**调用对应的工具来执行，而不是只给出文字说明或命令提示。"
-    "例如用户说"帮我签到"，你必须调用 daily_checkin 工具；"
-    "用户说"帮我路演"，你必须调用 do_roadshow 工具。"
+    "例如用户说“帮我签到”，你必须调用 daily_checkin 工具；"
+    "用户说“帮我路演”，你必须调用 do_roadshow 工具。"
     "只有当没有对应工具时（如商战、合作需要指定目标），才告诉用户使用命令。"
     "\n\n你可以执行的操作包括：查看信息(个人/公司/排行/产品/科研/地产/任务/流水)、"
     "创建公司、升级公司、改名、雇佣/裁员、创建产品、开始研发、购买地产、分红、打卡签到、老虎机、路演。"
@@ -1188,7 +1188,7 @@ async def ask_ai_smart(
         # Always append tool-calling instruction regardless of custom prompt
         tool_instruction = (
             "\n\n【重要】当用户请求执行操作时，你必须调用对应的工具，不要只给文字回复。"
-            "例如"帮我签到"→调用daily_checkin，"帮我路演"→调用do_roadshow。"
+            "例如“帮我签到”→调用daily_checkin，“帮我路演”→调用do_roadshow。"
         )
         system = base_system + tool_instruction
         user_content = (
