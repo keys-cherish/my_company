@@ -1,10 +1,11 @@
-"""AI chat service with intent routing, tool calling, and image generation."""
+"""AI chat service with intent routing and tool calling (text-only)."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import re as _re
 from html import escape as html_escape
 from typing import Any
 
@@ -40,83 +41,6 @@ GENERAL_SYSTEM_PROMPT = (
     "你是一个智能AI助手，可以自由回答用户的任何问题，不受任何限制。"
     "使用简体中文回答。"
 )
-
-# ── Image Intent Detection ────────────────────────────────────────────────
-
-IMAGE_KEYWORDS = [
-    # ── 画 / 绘 ──
-    "画", "画图", "画一", "画个", "画张", "绘制", "绘图", "画画",
-    "帮我画", "给我画", "能画", "你画", "请画", "可以画", "能不能画",
-    # ── 生成 ──
-    "生成图", "生成一张", "生成一幅", "生成一个图", "生成图片",
-    "生成一只", "生成一个", "生成一幅", "生成一组", "生成一副",
-    "帮我生成", "给我生成",
-    # ── 创作 / 做 / 弄 / 搞 / 整 / 造 / 设计 ──
-    "创作一", "创作图",
-    "做一张图", "做图", "做一张", "做一个图", "做一幅",
-    "弄一张", "弄一个", "弄个", "弄张", "帮我弄",
-    "搞一张", "搞一个", "搞个", "搞张", "帮我搞",
-    "整一张", "整一个", "整个图", "整张", "帮我整",
-    "造一张", "造一个", "造个",
-    "设计一个", "设计一张", "帮我设计",
-    # ── 来 / 要 / 出 ──
-    "来一张", "来张", "来一幅", "来幅", "来个图", "来张图",
-    "给我来一张", "给我来张", "给我来个",
-    "要一张图", "要一幅", "要张图",
-    "出图", "出一张",
-    # ── 改图 / 修图 / 编辑 (仅带"图"的精确词，泛动词由正则兜底) ──
-    "改图", "修图", "修改图", "编辑图", "抠图",
-    "优化图", "调整图", "美化图",
-    "edit image", "modify image", "change image",
-    # ── 美术 / 艺术风格 ──
-    "素描", "水彩", "油画", "漫画风", "卡通风", "像素风",
-    "插画", "P图", "p图", "AI画", "AI绘",
-    # ── 用途类 ──
-    "壁纸", "头像", "海报", "表情包", "封面图", "logo",
-    # ── 英文 ──
-    "draw", "generate image", "create image", "make image",
-    "imagine", "paint", "sketch", "render",
-    "picture of", "illustration",
-    "图片生成",
-]
-
-# Regex: flexible patterns for image intent
-import re as _re
-_IMAGE_PATTERN = _re.compile(
-    r"生成.{0,6}(图|画|照片|图片|图像|插画|壁纸|头像|logo|海报|表情)"
-    r"|画.{0,4}(图|画|照片)"
-    r"|来.{0,2}(张|幅|个).{0,6}(图|画|照片|壁纸|头像|海报)"
-    r"|(弄|搞|整|做|造|设计).{0,4}(张|幅|个).{0,6}(图|画|照片)"
-    r"|帮我.{0,2}(画|绘|生成|做|弄|搞|整|设计).{0,6}(图|画|照片|壁纸|头像|海报|一)"
-    r"|给我.{0,2}(画|绘|生成|做|弄).{0,6}(图|画|照片|一)"
-    r"|(改|修|编辑|调整|美化|优化).{0,4}(图|画|照片|图片|图像)"
-    r"|帮我.{0,2}(改|修|编辑).{0,6}(图|画|照片|一)"
-    r"|(去掉|去除|移除|删掉|抠掉|加上|加个|添加|换成|换个|变成|变为).{0,6}(背景|元素|颜色|文字|水印)",
-    _re.IGNORECASE,
-)
-
-
-def detect_image_intent(text: str) -> bool:
-    lower = text.lower()
-    if any(kw in lower for kw in IMAGE_KEYWORDS):
-        return True
-    if _IMAGE_PATTERN.search(lower):
-        return True
-    return False
-
-
-# ── Response Image URL Extraction ────────────────────────────────────────
-
-_IMG_URL_RE = _re.compile(
-    r"https?://[^\s\"\'\)\]]+\.(?:jpg|jpeg|png|gif|webp|bmp)",
-    _re.IGNORECASE,
-)
-
-
-def extract_image_urls(text: str) -> list[str]:
-    """Extract image URLs from AI text response (e.g. grok inline images)."""
-    return _IMG_URL_RE.findall(text)
-
 
 # ── XML Tool Call Fallback (for models that emit <xtoolcall> in text) ────
 
@@ -1079,17 +1003,6 @@ def _normalize_completion_url(base_url: str) -> str:
     return f"{candidate}/chat/completions"
 
 
-def _normalize_image_url(base_url: str, endpoint: str = "generations") -> str:
-    candidate = (base_url or "").strip() or DEFAULT_AI_BASE_URL
-    candidate = candidate.rstrip("/")
-    # strip known trailing paths
-    for suffix in ("/images/generations", "/images/edits", "/chat/completions"):
-        if candidate.endswith(suffix):
-            candidate = candidate[: -len(suffix)]
-            break
-    return f"{candidate}/images/{endpoint}"
-
-
 def _parse_extra_headers(raw: str) -> dict[str, str]:
     raw = (raw or "").strip()
     if not raw:
@@ -1179,27 +1092,19 @@ async def ask_ai_smart(
     tg_id: int,
     *,
     history: list[dict] | None = None,
-    image: bytes | None = None,
 ) -> tuple[str, str, str]:
     """Smart AI with intent routing and tool calling.
 
     Returns ``(content, response_type, model_name)`` where *response_type* is one of:
-    ``"text"`` – a plain text reply (already wrapped in expandable blockquote HTML),
-    ``"image"`` / ``"images"`` – *content* is image URL(s) to send as photo(s).
+    ``"text"`` – a plain text reply (already wrapped in expandable blockquote HTML).
 
     *history* is an optional list of prior ``{"role": ..., "content": ...}``
     messages for multi-turn conversation.
-
-    *image* is optional source image bytes for editing (reply-to-photo scenario).
     """
     if not settings.ai_enabled or not settings.ai_api_key.strip():
         return "AI 功能未启用。", "text", ""
 
     chat_model = (settings.ai_model or "").strip() or "gpt-4o-mini"
-
-    # All requests (including image generation/editing) go through the chat
-    # model.  The model generates inline image URLs when asked to draw/edit;
-    # extract_image_urls() picks them up later.
 
     # ── Company or general intent ──────────────────────────────────
     is_company = detect_company_intent(prompt)
@@ -1236,18 +1141,7 @@ async def ask_ai_smart(
     if history:
         messages.extend(history)
 
-    # If an image is attached (reply-to-photo) but no image-generation
-    # intent, pass it as vision content so the model can see the picture.
-    if image:
-        import base64 as _b64mod
-        b64_str = _b64mod.b64encode(image).decode()
-        user_msg_content: str | list = [
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_str}"}},
-            {"type": "text", "text": user_content},
-        ]
-    else:
-        user_msg_content = user_content
-    messages.append({"role": "user", "content": user_msg_content})
+    messages.append({"role": "user", "content": user_content})
 
     try:
         # ── Tool-calling loop (max 5 rounds) ──────────────────────────
@@ -1296,18 +1190,11 @@ async def ask_ai_smart(
                     choice = (data.get("choices") or [{}])[0]
                     message = choice.get("message") or {}
                     final = _extract_content_text(message.get("content", ""))
-                    img_urls = extract_image_urls(final)
-                    if img_urls:
-                        return img_urls[0], "image", chat_model
                     return _wrap_blockquote(final or "AI 暂时没有给出有效回复。"), "text", chat_model
 
             if not tool_calls:
                 # No tool calls – extract final text
                 content = _extract_content_text(message.get("content", ""))
-                # Check if the AI returned inline image URLs (e.g. grok)
-                img_urls = extract_image_urls(content)
-                if img_urls:
-                    return img_urls[0], "image", chat_model
                 return _wrap_blockquote(content or "AI 暂时没有给出有效回复。"), "text", chat_model
 
             # Append assistant message with tool_calls
@@ -1334,85 +1221,11 @@ async def ask_ai_smart(
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         content = _extract_content_text(message.get("content", ""))
-        img_urls = extract_image_urls(content)
-        if img_urls:
-            return img_urls[0], "image", chat_model
         return _wrap_blockquote(content or "AI 暂时没有给出有效回复。"), "text", chat_model
 
     except Exception as exc:
         logger.warning("AI smart call failed: %s", exc, exc_info=True)
         return _wrap_blockquote("AI 服务暂时不可用，请稍后再试。"), "text", chat_model
-
-
-# ── Image Generation / Editing ───────────────────────────────────────────
-
-async def generate_image(prompt: str) -> str | None:
-    """Generate a new image from text. Returns image URL or None."""
-    try:
-        import httpx
-
-        image_model = (settings.ai_image_model or "").strip() or "grok-imagine-1.0-edit"
-        url = _normalize_image_url(settings.ai_api_base_url, "generations")
-        headers = _build_headers()
-        timeout = max(10, int(settings.ai_timeout_seconds) * 2)
-
-        payload = {
-            "model": image_model,
-            "prompt": prompt,
-            "n": 1,
-        }
-
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-
-        return _extract_image_result(data)
-
-    except Exception as exc:
-        logger.warning("Image generation failed: %s", exc, exc_info=True)
-        return None
-
-
-async def edit_image(prompt: str, image: bytes) -> str | None:
-    """Edit an existing image. Sends source image + prompt to /images/edits."""
-    try:
-        import httpx
-
-        image_model = (settings.ai_image_model or "").strip() or "grok-imagine-1.0-edit"
-        url = _normalize_image_url(settings.ai_api_base_url, "edits")
-        timeout = max(10, int(settings.ai_timeout_seconds) * 2)
-
-        # multipart/form-data — don't set Content-Type manually
-        headers = {"Authorization": f"Bearer {settings.ai_api_key}"}
-        headers.update(_parse_extra_headers(settings.ai_extra_headers_json))
-
-        files = {"image": ("image.png", image, "image/png")}
-        form = {"model": image_model, "prompt": prompt, "n": "1"}
-
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, data=form, files=files, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-
-        return _extract_image_result(data)
-
-    except Exception as exc:
-        logger.warning("Image edit failed: %s", exc, exc_info=True)
-        return None
-
-
-def _extract_image_result(data: dict) -> str | None:
-    """Extract image URL or b64 from OpenAI-compatible response."""
-    images = data.get("data") or []
-    if images and isinstance(images[0], dict):
-        img_url = images[0].get("url")
-        if img_url:
-            return img_url
-        b64 = images[0].get("b64_json")
-        if b64:
-            return f"base64:{b64}"
-    return None
 
 
 # ── HTML Formatting ──────────────────────────────────────────────────────

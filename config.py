@@ -165,7 +165,6 @@ class Settings(BaseSettings):
     ai_max_tokens: int = 500
     ai_system_prompt: str = ""
     ai_chat_system_prompt: str = ""
-    ai_image_model: str = "grok-imagine-1.0-edit"  # 图片生成模型
     # 额外请求头，JSON格式；例如 {"X-Api-Version":"2024-01-01"}
     ai_extra_headers_json: str = ""
 
