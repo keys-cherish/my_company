@@ -69,7 +69,8 @@ class Settings(BaseSettings):
     daily_operating_cost_pct: float = 0.07
     dividend_pct: float = 0.70
     max_company_funds: int = 10_000_000  # 公司积分上限: 1000万
-    max_user_traffic: int = 1_000_000  # 个人积分上限: 100万（超出自动注资公司）
+    max_self_points: int = 1_000_000  # 个人积分上限基础值: 100万
+    max_self_points_per_level: int = 50_000  # 每级公司提升个人积分上限: 5万
     max_daily_dividend: int = 200_000  # 每日分红上限: 20万
     max_total_estates: int = 8  # 每家公司最多拥有的地产总数
 

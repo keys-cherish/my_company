@@ -66,6 +66,17 @@ async def get_user_by_tg_id(session: AsyncSession, tg_id: int) -> User | None:
     return user
 
 
+async def get_user_max_points(session: AsyncSession, user_id: int) -> int:
+    """Calculate dynamic personal points cap: base + per_level * company_level."""
+    from services.company_service import get_companies_by_owner
+    base = settings.max_self_points
+    per_level = settings.max_self_points_per_level
+    companies = await get_companies_by_owner(session, user_id)
+    if companies:
+        return base + per_level * companies[0].level
+    return base
+
+
 async def add_self_points_by_user_id(
     session: AsyncSession,
     user_id: int,
@@ -74,21 +85,16 @@ async def add_self_points_by_user_id(
 ) -> bool:
     """Atomically add/subtract personal points by internal user id.
 
-    When adding funds that would exceed max_user_traffic, the excess is
-    automatically invested into the user's first company (if any).
-
-    Args:
-        session: Database session
-        user_id: User ID (not tg_id)
-        amount: Amount to add (negative for deduction)
-        reason: Reason for the change (for logging)
+    When adding funds that would exceed dynamic max (base + per_level * company_level),
+    the excess is automatically invested into the user's first company (if any).
     """
-    max_points = settings.max_user_traffic
     for _retry in range(3):
         user = await session.get(User, user_id)
         if user is None:
             return False
         await _merge_local_points_into_shared_once(user)
+
+        max_points = await get_user_max_points(session, user_id)
 
         current_shared = await _apply_shared_delta(user.tg_id, 0)
         if current_shared is None:

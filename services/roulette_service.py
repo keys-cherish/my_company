@@ -628,15 +628,21 @@ def _devil_single_step(state: GameState) -> list[str]:
         return []
 
     known = devil.get("known_shell")
-    if making_mistake:
-        target = random.choice(alive_opponents + [devil])
-        return _do_shoot(state, DEVIL_TG_ID, target["tg_id"])
-    elif known == "blank":
+    if known == "blank":
+        # Known blank → always shoot self (free extra turn)
         return _do_shoot(state, DEVIL_TG_ID, DEVIL_TG_ID)
     elif known == "live":
-        weakest = min(alive_opponents, key=lambda p: p["hp"])
-        return _do_shoot(state, DEVIL_TG_ID, weakest["tg_id"])
+        # Known live → never shoot self; mistake just picks random opponent
+        if making_mistake:
+            target = random.choice(alive_opponents)
+        else:
+            target = min(alive_opponents, key=lambda p: p["hp"])
+        return _do_shoot(state, DEVIL_TG_ID, target["tg_id"])
     else:
+        # Unknown shell
+        if making_mistake:
+            target = random.choice(alive_opponents + [devil])
+            return _do_shoot(state, DEVIL_TG_ID, target["tg_id"])
         remaining = state.shells[state.shell_index:]
         live_ratio = sum(1 for s in remaining if s) / max(1, len(remaining))
         if live_ratio <= 0.35:

@@ -257,16 +257,21 @@ async def cleanup_excess_funds(session: AsyncSession) -> list[str]:
 
 
 async def cleanup_excess_user_traffic(session: AsyncSession) -> list[str]:
-    """Cap user self_points at max_user_traffic, auto-invest excess to company."""
-    max_traffic = settings.max_user_traffic
+    """Cap user self_points at dynamic max (base + per_level * company_level)."""
+    from services.user_service import get_user_max_points
     msgs = []
+    # Use base max to find candidates (actual max may be higher with company level)
+    base_max = settings.max_self_points
     result = await session.execute(
-        select(User).where(User.self_points > max_traffic)
+        select(User).where(User.self_points > base_max)
     )
     over_users = list(result.scalars().all())
 
     for user in over_users:
-        overflow = user.self_points - max_traffic
+        user_max = await get_user_max_points(session, user.id)
+        if user.self_points <= user_max:
+            continue  # Within dynamic cap for their company level
+        overflow = user.self_points - user_max
         from services.user_service import add_self_points_by_user_id
         await add_self_points_by_user_id(
             session,
@@ -286,7 +291,7 @@ async def cleanup_excess_user_traffic(session: AsyncSession) -> list[str]:
                 )
                 companies[0].cp_points = new_funds
 
-        msg = f"⚠️ 用户「{user.tg_name}」个人积分超过上限({max_traffic:,})，已修正(溢出注资公司)"
+        msg = f"⚠️ 用户「{user.tg_name}」个人积分超过上限({user_max:,})，已修正(溢出注资公司)"
         msgs.append(msg)
         logger.warning(msg)
 

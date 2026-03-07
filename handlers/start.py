@@ -171,13 +171,14 @@ async def cb_menu_profile(callback: types.CallbackQuery):
     tg_id = callback.from_user.id
 
     async with async_session() as session:
-        from services.user_service import get_user_by_tg_id
+        from services.user_service import get_user_by_tg_id, get_user_max_points
         user = await get_user_by_tg_id(session, tg_id)
         if not user:
             await callback.answer("请先 /cp_create 创建公司", show_alert=True)
             return
         companies = await get_companies_by_owner(session, user.id)
         self_points = user.self_points
+        max_points = await get_user_max_points(session, user.id)
         reputation = user.reputation
 
     company_names = ", ".join(c.name for c in companies) if companies else "无"
@@ -185,7 +186,7 @@ async def cb_menu_profile(callback: types.CallbackQuery):
     text = (
         f"📊 个人面板 — {callback.from_user.full_name}\n"
         f"{'─' * 24}\n"
-        f"💰 积分: {fmt_traffic(self_points)}\n"
+        f"💰 个人积分: {fmt_traffic(self_points)} / {fmt_traffic(max_points)}\n"
         f"⭐ 声望: {reputation}\n"
         f"🏢 公司: {company_names}\n"
     )

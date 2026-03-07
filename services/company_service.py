@@ -66,7 +66,7 @@ async def create_company(
         name=name,
         company_type=company_type,
         owner_id=owner_id,
-        cp_points=settings.company_creation_cost,
+        cp_points=0,  # 不赠送初始积分，防止反复创建刷积分
         employee_count=settings.base_employee_limit,
     )
     session.add(company)
@@ -77,7 +77,7 @@ async def create_company(
         company_id=company.id,
         user_id=owner_id,
         shares=100.0,
-        invested_amount=settings.company_creation_cost,
+        invested_amount=0,
     )
     session.add(shareholder)
     await session.flush()

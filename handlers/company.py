@@ -604,7 +604,7 @@ async def cmd_dissolve(message: types.Message):
             names = ", ".join(f"「{c.name}」" for c in companies)
         await message.answer(
             f"⚠️ 确认要注销以下公司吗？\n{names}\n\n"
-            "⚠️ 注销后所有公司数据和个人积分将被清零！\n"
+            "⚠️ 注销后所有公司数据将被清空！个人积分保留。\n"
             "确认请发送: /cp_dissolve confirm"
         )
         return
@@ -637,19 +637,12 @@ async def cmd_dissolve(message: types.Message):
                 ))
                 await session.delete(company)
 
-            # 清空个人积分（同步共享账户）
-            if user.self_points > 0:
-                await add_self_points_by_user_id(
-                    session,
-                    user.id,
-                    -int(user.self_points),
-                    reason="dissolve_reset_self_points",
-                )
+            # 保留个人积分，只清空声望
             user.reputation = 0
             await session.flush()
 
     await message.answer(
         f"🗑 公司已注销: {', '.join(f'「{n}」' for n in names)}\n"
-        f"所有积分和声望已清零\n"
+        f"公司数据已清空，个人积分保留，声望已清零\n"
         f"使用 /cp_create 重新开始"
     )
