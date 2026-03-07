@@ -22,6 +22,20 @@ TEXT_ONLY_PREFIX_PROMPT = (
     "严禁返回任何图片、图片链接、base64图片数据或要求用户查看图像。"
 )
 
+TEXT_ONLY_BLOCK_MESSAGE = "当前机器人仅支持文本回答，不提供图片生成或图片链接。"
+
+_IMG_URL_RE = _re.compile(
+    r"https?://[^\s\"'\)\]]+\.(?:jpg|jpeg|png|gif|webp|bmp)(?:\?[^\s\"'\)\]]*)?",
+    _re.IGNORECASE,
+)
+_MARKDOWN_IMG_RE = _re.compile(r"!\[[^\]]*\]\([^)]+\)")
+_IMAGE_GEN_TEXT_RE = _re.compile(
+    r"\b(i generated images?|generated images?)\b|"
+    r"已生成图片|生成了图片|图片已生成|"
+    r"image\.(?:jpg|jpeg|png|gif|webp|bmp)",
+    _re.IGNORECASE,
+)
+
 GAME_SYSTEM_PROMPT = (
     '你是"商业帝国"Telegram经营游戏机器人的AI助手。'
     "你必须始终使用简体中文、语气专业简洁、结论先行。"
@@ -1194,12 +1208,12 @@ async def ask_ai_smart(
                     data = await _call_chat_api(messages, tools=None)
                     choice = (data.get("choices") or [{}])[0]
                     message = choice.get("message") or {}
-                    final = _extract_content_text(message.get("content", ""))
+                    final = _sanitize_text_only_reply(_extract_content_text(message.get("content", "")))
                     return _wrap_blockquote(final or "AI 暂时没有给出有效回复。"), "text", chat_model
 
             if not tool_calls:
                 # No tool calls – extract final text
-                content = _extract_content_text(message.get("content", ""))
+                content = _sanitize_text_only_reply(_extract_content_text(message.get("content", "")))
                 return _wrap_blockquote(content or "AI 暂时没有给出有效回复。"), "text", chat_model
 
             # Append assistant message with tool_calls
@@ -1225,7 +1239,7 @@ async def ask_ai_smart(
         data = await _call_chat_api(messages, tools=None)
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
-        content = _extract_content_text(message.get("content", ""))
+        content = _sanitize_text_only_reply(_extract_content_text(message.get("content", "")))
         return _wrap_blockquote(content or "AI 暂时没有给出有效回复。"), "text", chat_model
 
     except Exception as exc:
@@ -1239,6 +1253,20 @@ def _wrap_blockquote(text: str) -> str:
     """Wrap text in Telegram expandable blockquote HTML."""
     escaped = html_escape(text, quote=False)
     return f"<blockquote expandable>{escaped}</blockquote>"
+
+
+def _sanitize_text_only_reply(text: str) -> str:
+    """Enforce text-only policy at output stage."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+    if _MARKDOWN_IMG_RE.search(cleaned):
+        return TEXT_ONLY_BLOCK_MESSAGE
+    if _IMG_URL_RE.search(cleaned):
+        return TEXT_ONLY_BLOCK_MESSAGE
+    if _IMAGE_GEN_TEXT_RE.search(cleaned):
+        return TEXT_ONLY_BLOCK_MESSAGE
+    return cleaned
 
 
 # ── Legacy API (kept for ai_rd_service compatibility) ────────────────────
@@ -1264,7 +1292,7 @@ async def ask_ai_chat(prompt: str) -> str:
         data = await _call_chat_api(messages)
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
-        content = _extract_content_text(message.get("content", ""))
+        content = _sanitize_text_only_reply(_extract_content_text(message.get("content", "")))
         return content or "AI 暂时没有给出有效回复。"
     except Exception as exc:
         logger.warning("AI chat call failed: %s", exc)
