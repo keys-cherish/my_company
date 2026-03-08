@@ -111,6 +111,11 @@ class Settings(BaseSettings):
     backup_keep_files: int = 72
     backup_notify_super_admin: bool = True
 
+    # WebDAV remote backup
+    webdav_backup_url: str = ""
+    webdav_backup_username: str = ""
+    webdav_backup_password: str = ""
+
     # Tax system (统一税率体系)
     # 所有税费使用统一税率：日结算税、分红税、交易税等
     tax_rate: float = 0.10  # 统一税率 10%
@@ -168,16 +173,13 @@ class Settings(BaseSettings):
     # 额外请求头，JSON格式；例如 {"X-Api-Version":"2024-01-01"}
     ai_extra_headers_json: str = ""
 
-    # 管理员
-    super_admin_tg_id: int = 0  # 兼容旧配置：单个超级管理员TG ID（高危命令）
-    super_admin_tg_ids: str = ""  # 新配置：逗号分隔的超级管理员TG ID列表
-    admin_tg_ids: str = ""  # 逗号分隔的管理员TG ID列表
+    # 管理员（仅超级管理员，通过 TG ID 判断）
+    super_admin_tg_id: int = 0  # 兼容旧配置：单个超级管理员TG ID
+    super_admin_tg_ids: str = ""  # 逗号分隔的超级管理员TG ID列表
 
     @property
     def admin_tg_id_set(self) -> set[int]:
-        if not self.admin_tg_ids.strip():
-            return set()
-        return {int(x.strip()) for x in self.admin_tg_ids.split(",") if x.strip()}
+        return self.super_admin_tg_id_set
 
     @property
     def super_admin_tg_id_set(self) -> set[int]:

@@ -118,6 +118,9 @@ async def add_self_points_by_user_id(
                     else:
                         overflow = projected - max_points
                         delta_to_apply = amount - overflow
+                else:
+                    # No company: hard cap at max_points
+                    delta_to_apply = max(0, max_points - current_shared)
 
         shared_new = current_shared
         if delta_to_apply != 0:

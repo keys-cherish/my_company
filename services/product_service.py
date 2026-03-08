@@ -28,6 +28,7 @@ _products_data: dict | None = None
 MAX_PRODUCT_DAILY_INCOME = 500_000
 MAX_PRODUCT_VERSION = 50
 MAX_DAILY_PRODUCT_CREATE = 3
+MAX_PRODUCTS = 8
 
 # Progressive gate: higher stage requires stronger company capability.
 PRODUCT_CREATE_COST_GROWTH = 0.30
@@ -153,6 +154,14 @@ async def create_product(
         pass
     if today_count >= MAX_DAILY_PRODUCT_CREATE:
         return None, f"每日最多创建{MAX_DAILY_PRODUCT_CREATE}个产品"
+
+    # 产品总数限制
+    product_count_result = await session.execute(
+        select(sqlfunc.count()).select_from(Product).where(Product.company_id == company_id)
+    )
+    product_count = product_count_result.scalar() or 0
+    if product_count >= MAX_PRODUCTS:
+        return None, f"产品数量已达上限（{MAX_PRODUCTS}个）"
 
     # 公司积分检查
     if company.cp_points < investment:

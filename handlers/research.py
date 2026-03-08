@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 
 from aiogram import F, Router, types
-from sqlalchemy import func as sqlfunc, select
+from sqlalchemy import func as sqlfunc, select, text
 
 from db.engine import async_session
 from keyboards.menus import tech_list_kb, tag_kb
@@ -82,11 +82,11 @@ async def cb_research_list(callback: types.CallbackQuery, company_id: int | None
         completed = await get_completed_techs(session, company_id)
         in_progress = await get_in_progress_research(session, company_id)
         available = await get_available_techs(session, company_id)
-        now_db = (await session.execute(select(sqlfunc.now()))).scalar()
+        # LOCALTIMESTAMP returns TIMESTAMP WITHOUT TIME ZONE in the session's
+        # timezone, matching how started_at is stored (via server_default=now()).
+        now_db = (await session.execute(select(text("LOCALTIMESTAMP")))).scalar()
         if now_db is None:
             now_db = dt.datetime.utcnow()
-        if getattr(now_db, "tzinfo", None):
-            now_db = now_db.replace(tzinfo=None)
 
     tree = {t["tech_id"]: t for t in get_tech_tree_display()}
     lines = [f"🔬 {company.name} — 科研中心", "─" * 24]
@@ -137,7 +137,6 @@ async def cb_research_list(callback: types.CallbackQuery, company_id: int | None
                     f"  • {name}\n"
                     f"    状态: 研究中\n"
                     f"    开始时间(北京时间): {start_display}\n"
-                    f"    所需时间: {fmt_duration(duration_sec)}\n"
                     f"    剩余时间: {fmt_duration(remaining)}"
                 )
             else:

@@ -21,6 +21,7 @@ from services.roulette_service import (
     _get_player,
     _settle_game,
     cancel_game,
+    check_ttl_refund,
     consume_self_points,
     create_room,
     devil_execute_step,
@@ -276,6 +277,11 @@ async def cmd_cp_demon(message: types.Message):
             sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
             await mark_panel(sent.chat.id, sent.message_id, tg_id)
             return
+
+    # Check for TTL-expired game and auto-refund 50%
+    refund = await check_ttl_refund(tg_id)
+    if refund > 0:
+        await message.answer(f"⏰ 上一局轮盘赌超时失效，已退还 {refund:,} 积分（50%赌注）")
 
     if bet <= 0:
         pts = await get_points_by_tg_id(tg_id)
@@ -638,7 +644,18 @@ async def cb_roulette_refresh(callback: types.CallbackQuery):
 
     state = await get_game_state(room_id)
     if not state:
-        await callback.answer("游戏已结束", show_alert=True)
+        # TTL expired — auto-refund 50%
+        refund = await check_ttl_refund(tg_id)
+        if refund > 0:
+            try:
+                await callback.message.edit_text(
+                    f"⏰ 轮盘赌超时失效，已退还 {refund:,} 积分（50%赌注）"
+                )
+            except Exception:
+                pass
+            await callback.answer()
+        else:
+            await callback.answer("游戏已结束", show_alert=True)
         return
 
     text = render_game_panel(state, tg_id)

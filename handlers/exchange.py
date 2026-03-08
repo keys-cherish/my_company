@@ -7,6 +7,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from commands import CMD_EXCHANGE
+from cache.redis_client import get_redis
 from db.engine import async_session
 from keyboards.menus import tag_kb
 from services.company_service import get_company_by_id, get_companies_by_owner
@@ -231,6 +232,7 @@ async def cb_shop_buy(callback: types.CallbackQuery):
     parts = callback.data.split(":")
     item_key = parts[2]
     company_id = int(parts[3])
+    source_token = parts[4] if len(parts) >= 5 else "main"
     tg_id = callback.from_user.id
 
     async with async_session() as session:
@@ -246,6 +248,10 @@ async def cb_shop_buy(callback: types.CallbackQuery):
             ok, msg = await buy_item(session, tg_id, company_id, item_key)
 
     await callback.answer(msg, show_alert=True)
+    # 购买后刷新回商店列表（确保价格同步）
+    if ok:
+        callback.data = f"shop:list:{source_token}"
+        await cb_shop_list(callback)
 
 
 # ========== 黑市特惠 ==========

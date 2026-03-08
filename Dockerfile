@@ -1,7 +1,10 @@
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 # Install uv (fast Python package manager)
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# Use system Python, don't download another version
+ENV UV_PYTHON_PREFERENCE=only-system
 
 WORKDIR /app
 

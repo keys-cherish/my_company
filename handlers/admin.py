@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 
 from aiogram import F, Router, types
 from aiogram.filters import Command
@@ -13,6 +14,7 @@ from commands import (
     CMD_DEDUCT_MONEY,
     CMD_GIVE_MONEY,
     CMD_MAINTAIN,
+    CMD_UNDO,
     CMD_WELFARE,
 )
 from db.engine import async_session
@@ -345,39 +347,115 @@ async def cmd_deduct_money(message: types.Message):
     )
 
 
-WELFARE_AMOUNT = 1_000_000
+WELFARE_COMPANY_AMOUNT = 100_000
+WELFARE_USER_AMOUNT = 10_000
 
 
 @router.message(Command(CMD_WELFARE))
 async def cmd_welfare(message: types.Message):
-    """超管命令：给全部公司发放固定积分。"""
+    """超管命令：给全部公司发放公司积分，给全部用户发放个人积分。"""
     if not is_super_admin(message.from_user.id):
         await message.answer("❌ 无权使用此命令")
         return
 
     from sqlalchemy import select
-    from db.models import Company
+    from db.models import Company, User
+    from services.user_service import add_self_points_by_user_id
 
     async with async_session() as session:
         async with session.begin():
+            # 公司积分
             result = await session.execute(select(Company))
             companies = list(result.scalars().all())
-            if not companies:
-                await message.answer("当前没有任何公司")
-                return
-
-            success = 0
+            company_success = 0
             for company in companies:
-                ok = await add_funds(session, company.id, WELFARE_AMOUNT)
+                ok = await add_funds(session, company.id, WELFARE_COMPANY_AMOUNT)
                 if ok:
-                    success += 1
+                    company_success += 1
+
+            # 个人积分
+            result = await session.execute(select(User))
+            users = list(result.scalars().all())
+            user_success = 0
+            for user in users:
+                ok = await add_self_points_by_user_id(
+                    session, user.id, WELFARE_USER_AMOUNT, reason="全服福利"
+                )
+                if ok:
+                    user_success += 1
+
+    # 记录到 Redis 以便撤销
+    from cache.redis_client import get_redis
+    r = await get_redis()
+    undo_data = json.dumps({
+        "action": "welfare",
+        "company_ids": [c.id for c in companies],
+        "company_amount": WELFARE_COMPANY_AMOUNT,
+        "company_success": company_success,
+        "user_ids": [u.id for u in users],
+        "user_amount": WELFARE_USER_AMOUNT,
+        "user_success": user_success,
+    })
+    await r.set(f"admin_undo:{message.from_user.id}", undo_data, ex=3600)
 
     await message.answer(
         f"🎁 全服福利发放完成\n"
         f"{'─' * 24}\n"
-        f"发放积分: {fmt_currency(WELFARE_AMOUNT)} / 家\n"
-        f"成功: {success} 家 / 共 {len(companies)} 家"
+        f"公司积分: {fmt_currency(WELFARE_COMPANY_AMOUNT)} / 家\n"
+        f"成功: {company_success} / {len(companies)} 家\n"
+        f"{'─' * 24}\n"
+        f"个人积分: {fmt_currency(WELFARE_USER_AMOUNT)} / 人\n"
+        f"成功: {user_success} / {len(users)} 人"
     )
+
+
+@router.message(Command(CMD_UNDO))
+async def cmd_undo(message: types.Message):
+    """超管命令：撤销上一次管理操作。"""
+    if not is_super_admin(message.from_user.id):
+        await message.answer("❌ 无权使用此命令")
+        return
+
+    from cache.redis_client import get_redis
+    from services.user_service import add_self_points_by_user_id
+
+    r = await get_redis()
+    raw = await r.get(f"admin_undo:{message.from_user.id}")
+    if not raw:
+        await message.answer("❌ 没有可撤销的操作（1小时内有效）")
+        return
+
+    data = json.loads(raw)
+    action = data.get("action")
+
+    if action == "welfare":
+        async with async_session() as session:
+            async with session.begin():
+                # 回扣公司积分
+                company_reverted = 0
+                for cid in data["company_ids"]:
+                    ok = await add_funds(session, cid, -data["company_amount"])
+                    if ok:
+                        company_reverted += 1
+
+                # 回扣个人积分
+                user_reverted = 0
+                for uid in data["user_ids"]:
+                    ok = await add_self_points_by_user_id(
+                        session, uid, -data["user_amount"], reason="撤销福利"
+                    )
+                    if ok:
+                        user_reverted += 1
+
+        await r.delete(f"admin_undo:{message.from_user.id}")
+        await message.answer(
+            f"↩️ 福利已撤销\n"
+            f"{'─' * 24}\n"
+            f"公司积分回扣: {company_reverted} / {len(data['company_ids'])} 家\n"
+            f"个人积分回扣: {user_reverted} / {len(data['user_ids'])} 人"
+        )
+    else:
+        await message.answer(f"❌ 不支持撤销的操作类型: {action}")
 
 
 async def _unpin_and_delete_stored_notice(bot: types.Bot, redis_key: str) -> None:
@@ -605,16 +683,14 @@ async def cmd_cleanup(message: types.Message):
         cleaned.append(f"战斗冷却键: {len(battle_keys)} 个")
 
     # 6. 数据库：修复科研时间异常（started_at 在未来的记录，重置为当前时间）
-    from sqlalchemy import select, func as sqlfunc
+    from sqlalchemy import select, func as sqlfunc, text as sql_text
     from sqlalchemy import delete as sql_delete
     from db.models import Company, User, Shareholder, ResearchProgress
     research_fixed = 0
     async with async_session() as session:
         async with session.begin():
-            # 获取数据库服务器当前时间
-            db_now = (await session.execute(select(sqlfunc.now()))).scalar()
-            if db_now and getattr(db_now, "tzinfo", None):
-                db_now = db_now.replace(tzinfo=None)
+            # LOCALTIMESTAMP matches started_at storage (both naive, same timezone)
+            db_now = (await session.execute(select(sql_text("LOCALTIMESTAMP")))).scalar()
 
             # 查找 started_at 在未来的科研记录
             if db_now:
@@ -661,6 +737,124 @@ async def cmd_cleanup(message: types.Message):
             backfill_msgs = await backfill_company_anomalies(session)
     if backfill_msgs:
         cleaned.extend(backfill_msgs)
+
+    # 9. 修正个人积分超出上限的用户
+    from services.user_service import get_user_max_points
+    points_fixed = 0
+    async with async_session() as session:
+        async with session.begin():
+            result = await session.execute(select(User))
+            all_users = list(result.scalars().all())
+            for u in all_users:
+                max_pts = await get_user_max_points(session, u.id)
+                if u.self_points > max_pts:
+                    excess = u.self_points - max_pts
+                    u.self_points = max_pts
+                    points_fixed += 1
+                    # 溢出部分投入公司（如有）
+                    user_companies = await get_companies_by_owner(session, u.id)
+                    if user_companies:
+                        await add_funds(session, user_companies[0].id, excess)
+            if points_fixed:
+                await session.flush()
+    if points_fixed:
+        cleaned.append(f"个人积分超限修正: {points_fixed} 人")
+
+    # 10. 清理超出上限的产品（每公司最多8个，保留日收入最高的）
+    from db.models import Product
+    from services.product_service import MAX_PRODUCTS
+    products_removed = 0
+    async with async_session() as session:
+        async with session.begin():
+            result = await session.execute(select(Company.id))
+            company_ids = [row[0] for row in result.all()]
+            for cid in company_ids:
+                result = await session.execute(
+                    select(Product)
+                    .where(Product.company_id == cid)
+                    .order_by(Product.daily_income.desc())
+                )
+                products = list(result.scalars().all())
+                if len(products) > MAX_PRODUCTS:
+                    for p in products[MAX_PRODUCTS:]:
+                        await session.delete(p)
+                        products_removed += 1
+            if products_removed:
+                await session.flush()
+    if products_removed:
+        cleaned.append(f"超限产品清理: {products_removed} 个（保留日收入最高的{MAX_PRODUCTS}个）")
+
+    # 11. 清理已注销但残留在数据库中的公司及其关联数据
+    from db.models import (
+        CompanyOperationProfile, Cooperation, DailyReport,
+        Product, RealEstate, Roadshow,
+    )
+    dissolved_companies = 0
+    orphan_related = 0
+    async with async_session() as session:
+        async with session.begin():
+            # 找出 owner 已拥有更新公司的旧公司（同一 owner 多家公司，保留最新的）
+            result = await session.execute(select(Company).order_by(Company.id))
+            all_companies = list(result.scalars().all())
+            owner_latest: dict[int, int] = {}
+            for c in all_companies:
+                if c.owner_id not in owner_latest or c.id > owner_latest[c.owner_id]:
+                    owner_latest[c.owner_id] = c.id
+            stale_ids = set()
+            for c in all_companies:
+                if c.id != owner_latest[c.owner_id]:
+                    stale_ids.add(c.id)
+
+            # 也清理 owner 不存在的孤儿公司
+            result = await session.execute(select(User.id))
+            valid_user_ids = {row[0] for row in result.all()}
+            for c in all_companies:
+                if c.owner_id not in valid_user_ids:
+                    stale_ids.add(c.id)
+
+            if stale_ids:
+                for cid in stale_ids:
+                    await session.execute(sql_delete(Product).where(Product.company_id == cid))
+                    await session.execute(sql_delete(Shareholder).where(Shareholder.company_id == cid))
+                    await session.execute(sql_delete(ResearchProgress).where(ResearchProgress.company_id == cid))
+                    await session.execute(sql_delete(Roadshow).where(Roadshow.company_id == cid))
+                    await session.execute(sql_delete(RealEstate).where(RealEstate.company_id == cid))
+                    await session.execute(sql_delete(DailyReport).where(DailyReport.company_id == cid))
+                    await session.execute(sql_delete(CompanyOperationProfile).where(CompanyOperationProfile.company_id == cid))
+                    await session.execute(sql_delete(Cooperation).where(
+                        (Cooperation.company_a_id == cid) | (Cooperation.company_b_id == cid)
+                    ))
+                    await session.execute(sql_delete(Company).where(Company.id == cid))
+                dissolved_companies = len(stale_ids)
+                await session.flush()
+
+            # 清理关联数据中引用不存在公司的孤儿记录
+            result = await session.execute(select(Company.id))
+            valid_cids = {row[0] for row in result.all()}
+            if valid_cids:
+                for model, col in [
+                    (Product, Product.company_id),
+                    (Shareholder, Shareholder.company_id),
+                    (ResearchProgress, ResearchProgress.company_id),
+                    (Roadshow, Roadshow.company_id),
+                    (RealEstate, RealEstate.company_id),
+                    (DailyReport, DailyReport.company_id),
+                    (CompanyOperationProfile, CompanyOperationProfile.company_id),
+                ]:
+                    r = await session.execute(sql_delete(model).where(~col.in_(valid_cids)))
+                    orphan_related += r.rowcount
+                # cooperations: either side references a deleted company
+                r = await session.execute(sql_delete(Cooperation).where(
+                    ~Cooperation.company_a_id.in_(valid_cids) | ~Cooperation.company_b_id.in_(valid_cids)
+                ))
+                orphan_related += r.rowcount
+                if orphan_related:
+                    await session.flush()
+
+    if dissolved_companies:
+        cleaned.append(f"残留公司清理: {dissolved_companies} 家（含全部关联数据）")
+    if orphan_related:
+        cleaned.append(f"孤儿关联数据清理: {orphan_related} 条")
 
     if cleaned:
         lines = ["🧹 数据清理完成:", "─" * 24] + [f"  • {c}" for c in cleaned]

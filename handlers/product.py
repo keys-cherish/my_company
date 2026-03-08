@@ -20,6 +20,7 @@ from services.product_service import (
     get_company_products,
     upgrade_product,
     MAX_PRODUCT_VERSION,
+    MAX_PRODUCTS,
 )
 from services.user_service import get_user_by_tg_id
 from utils.formatters import fmt_points
@@ -82,7 +83,7 @@ async def _refresh_product_list(callback: types.CallbackQuery, company_id: int):
                 return
             products = await get_company_products(session, company_id)
 
-        lines = [f"📦 {company.name} — 产品列表", "─" * 24]
+        lines = [f"📦 {company.name} — 产品列表 ({len(products)}/{MAX_PRODUCTS})", "─" * 24]
 
         product_buttons = []
         if products:
@@ -166,7 +167,7 @@ async def cb_product_list(callback: types.CallbackQuery, company_id: int | None 
 
         products = await get_company_products(session, company_id)
 
-    lines = [f"📦 {company.name} — 产品列表", "─" * 24]
+    lines = [f"📦 {company.name} — 产品列表 ({len(products)}/{MAX_PRODUCTS})", "─" * 24]
 
     product_buttons = []
     if products:

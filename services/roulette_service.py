@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Core settings
 ROOM_TTL = settings.roulette_room_ttl_seconds
+BET_KEY_TTL = ROOM_TTL + 300  # extra 5 min for refund detection
 MIN_BET = settings.roulette_min_bet
 MAX_BET_PCT = settings.roulette_max_bet_pct
 
@@ -64,7 +65,7 @@ async def consume_self_points(tg_id: int, amount: int) -> bool:
 
 # Three rounds, escalating difficulty.
 ROUND_CONFIG = [
-    {"hp": 2, "shells": 4, "live_min": 1, "live_max": 2, "items": 2},
+    {"hp": 2, "shells": 4, "live_min": 1, "live_max": 2, "items": 0},
     {"hp": 3, "shells": 6, "live_min": 2, "live_max": 4, "items": 3},
     {"hp": 4, "shells": 8, "live_min": 3, "live_max": 5, "items": 3},
 ]
@@ -203,6 +204,7 @@ async def _cleanup_room(room_id: str, player_tg_ids: list[int]) -> None:
     for tid in player_tg_ids:
         if tid != DEVIL_TG_ID:
             await r.delete(f"roulette_player:{tid}")
+            await r.delete(f"roulette_bet:{tid}")
 
 
 def _init_round(state: GameState) -> list[str]:
@@ -252,13 +254,14 @@ def _init_round(state: GameState) -> list[str]:
         line += " (奖池+50%)"
     msgs.append(line)
 
-    item_pool = _item_pool_for_round(rnd)
-    for p in _alive_players(state):
-        items = random.choices(item_pool, k=cfg["items"])
-        p["items"] = items
-        item_text = ", ".join(ITEM_NAME.get(i, i) for i in items)
-        name = "魔鬼" if p["is_devil"] else p["name"]
-        msgs.append(f"  {name}获得: {item_text}")
+    if cfg["items"] > 0:
+        item_pool = _item_pool_for_round(rnd)
+        for p in _alive_players(state):
+            items = random.choices(item_pool, k=cfg["items"])
+            p["items"] = items
+            item_text = ", ".join(ITEM_NAME.get(i, i) for i in items)
+            name = "魔鬼" if p["is_devil"] else p["name"]
+            msgs.append(f"  {name}获得: {item_text}")
 
     return msgs
 
@@ -758,6 +761,7 @@ async def create_room(
 
     await _save_state(state)
     await r.set(f"roulette_player:{creator_tg_id}", room_id, ex=ROOM_TTL)
+    await r.set(f"roulette_bet:{creator_tg_id}", str(bet), ex=BET_KEY_TTL)
 
     return True, (
         "😈 轮盘赌房间已创建！\n"
@@ -803,6 +807,7 @@ async def join_room(
 
     await _save_state(state)
     await r.set(f"roulette_player:{tg_id}", room_id, ex=ROOM_TTL)
+    await r.set(f"roulette_bet:{tg_id}", str(state.bet), ex=BET_KEY_TTL)
 
     return True, f"✅ {player_name} 加入了轮盘赌！（{len(state.players)}/3）", state
 
@@ -1117,6 +1122,7 @@ async def leave_room(
 
     r = await get_redis()
     await r.delete(f"roulette_player:{tg_id}")
+    await r.delete(f"roulette_bet:{tg_id}")
 
     # Refund bet
     if state.bet > 0:
@@ -1138,6 +1144,44 @@ async def get_player_room(tg_id: int) -> str | None:
     """Return current room_id for user, if any."""
     r = await get_redis()
     return await r.get(f"roulette_player:{tg_id}")
+
+
+async def check_ttl_refund(tg_id: int) -> int:
+    """Check if a game expired due to TTL and refund 50% of bet.
+
+    Returns refunded amount (0 if nothing to refund).
+    """
+    r = await get_redis()
+    # If player key still exists, room might still be alive — no refund
+    room_id = await r.get(f"roulette_player:{tg_id}")
+    if room_id:
+        state = await _load_state(room_id)
+        if state:
+            return 0  # room still exists, no refund needed
+        # Room gone but player key lingers — clean up player key
+        await r.delete(f"roulette_player:{tg_id}")
+
+    # Check if bet key exists (outlives room by 5 min)
+    raw_bet = await r.get(f"roulette_bet:{tg_id}")
+    if not raw_bet:
+        return 0
+
+    await r.delete(f"roulette_bet:{tg_id}")
+    try:
+        bet = int(raw_bet)
+    except (TypeError, ValueError):
+        return 0
+
+    refund = bet // 2
+    if refund > 0:
+        from services.user_service import add_points_by_tg_id
+
+        try:
+            await add_points_by_tg_id(tg_id, refund, reason="roulette_ttl_refund")
+        except Exception:
+            logger.exception("Failed to refund TTL-expired roulette bet for tg_id=%s", tg_id)
+            return 0
+    return refund
 
 
 async def get_game_state(room_id: str) -> GameState | None:
@@ -1221,12 +1265,8 @@ def render_game_panel(state: GameState, viewer_tg_id: int = 0) -> str:
 
     # --- Playing phase: normal compact panel ---
 
-    # Ammo info — prominent position at top
-    remaining = max(0, len(state.shells) - state.shell_index)
-    lines.append(f"🔫 {state.live_count}实弹 / {state.blank_count}空弹 (剩{remaining}发)")
-    lines.append("─" * 22)
-
     # HP display — hearts
+    lines.append("─" * 22)
     for p in state.players:
         name = _format_player_name(p)
         if not p.get("alive"):
@@ -1275,6 +1315,11 @@ def render_game_panel(state: GameState, viewer_tg_id: int = 0) -> str:
         lines.append("📋 行动记录:")
         for entry in recent:
             lines.append(f"  {_escape_text(entry)}")
+
+    # Shells info at bottom
+    remaining = len(state.shells) - state.shell_index
+    lines.append("")
+    lines.append(f"🔫 {state.live_count}实弹 / {state.blank_count}空弹 (剩{remaining}发)")
 
     return "\n".join(lines)
 

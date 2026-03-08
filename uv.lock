@@ -1023,6 +1023,7 @@ dependencies = [
     { name = "redis", extra = ["hiredis"] },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
+    { name = "watchfiles" },
 ]
 
 [package.metadata]
@@ -1039,6 +1040,7 @@ requires-dist = [
     { name = "redis", extras = ["hiredis"], specifier = ">=5.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.20.0" },
+    { name = "watchfiles", specifier = ">=1.1.1" },
 ]
 
 [[package]]

@@ -6,7 +6,7 @@ import datetime as dt
 import json
 from pathlib import Path
 
-from sqlalchemy import func as sqlfunc, select
+from sqlalchemy import func as sqlfunc, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cache.redis_client import get_redis
@@ -350,7 +350,9 @@ async def check_and_complete_research(
     company = await session.get(Company, company_id)
     company_type = company.company_type if company else "tech"
     if now is None:
-        now = (await session.execute(select(sqlfunc.now()))).scalar()
+        # LOCALTIMESTAMP returns naive timestamp in session timezone,
+        # matching how started_at is stored (server_default=now() → TIMESTAMP).
+        now = (await session.execute(select(text("LOCALTIMESTAMP")))).scalar()
     if now is None:
         now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     if getattr(now, "tzinfo", None):

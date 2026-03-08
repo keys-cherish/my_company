@@ -76,6 +76,12 @@ async def buy_item(
     # Research speed: escalating price + max 3 per research cycle
     r = await get_redis()
     if item_key == "speed_research":
+        # 必须有进行中的科研才能购买
+        from services.research_service import get_in_progress_research
+        in_progress = await get_in_progress_research(session, company_id)
+        if not in_progress:
+            return False, "当前没有进行中的科研，无法购买加速"
+
         accel_key = f"research_accel_count:{company_id}"
         count_str = await r.get(accel_key)
         accel_count = int(count_str) if count_str else 0

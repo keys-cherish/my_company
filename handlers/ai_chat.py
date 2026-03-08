@@ -25,7 +25,7 @@ CONV_MAX_TURNS = 10      # keep last 10 exchanges (20 messages)
 
 
 def _is_admin_or_super_admin(tg_id: int) -> bool:
-    return tg_id in settings.super_admin_tg_id_set or tg_id in settings.admin_tg_id_set
+    return tg_id in settings.super_admin_tg_id_set
 
 
 def _extract_prompt_without_mention(text: str, bot_username: str) -> str:

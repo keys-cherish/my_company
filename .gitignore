@@ -42,6 +42,9 @@ logs/
 
 # Backup files (contain database data)
 my_company_backup_*.json.gz
+my_company_backup_*.json
+db_backup/
+backup.*
 
 # Docker persistent data
 postgres_data/

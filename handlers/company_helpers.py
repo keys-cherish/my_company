@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
+import logging
 
 from aiogram import types
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -13,6 +15,8 @@ from sqlalchemy import select
 
 from cache.redis_client import get_redis
 from config import settings as cfg
+
+_logger = logging.getLogger(__name__)
 from db.engine import async_session
 from db.models import DailyReport, Product, User
 from keyboards.menus import company_detail_kb, tag_kb
@@ -77,20 +81,32 @@ RENAME_COOLDOWN = 86400  # 改名冷却 24小时
 # ── 共享函数 ──────────────────────────────────────────
 
 async def _safe_edit_or_send(callback: types.CallbackQuery, text: str, reply_markup=None):
-    """Prefer editing current panel; only send new message when edit is impossible."""
-    try:
-        await callback.message.edit_text(text, reply_markup=reply_markup)
-        return
-    except TelegramBadRequest as e:
-        # Avoid duplicate panels when user reopens same page quickly.
-        if "message is not modified" in str(e).lower():
+    """Prefer editing current panel; only send new message when edit is impossible.
+    Auto-retries once on Telegram rate limit.
+    """
+    for attempt in range(2):
+        try:
+            await callback.message.edit_text(text, reply_markup=reply_markup)
             return
-    except Exception:
-        # Fall through to send a fresh panel.
-        pass
+        except TelegramBadRequest as e:
+            if "message is not modified" in str(e).lower():
+                return
+        except TelegramRetryAfter as e:
+            if attempt == 0:
+                _logger.warning("TG限流，等待 %d 秒后重试", e.retry_after)
+                await asyncio.sleep(e.retry_after)
+                continue
+            await callback.answer(f"被TG限流，请{e.retry_after}秒后再试", show_alert=True)
+            return
+        except Exception:
+            break  # Fall through to send a fresh panel
 
-    sent = await callback.message.answer(text, reply_markup=reply_markup)
-    await mark_panel(sent.chat.id, sent.message_id, callback.from_user.id)
+    try:
+        sent = await callback.message.answer(text, reply_markup=reply_markup)
+        await mark_panel(sent.chat.id, sent.message_id, callback.from_user.id)
+    except TelegramRetryAfter as e:
+        _logger.warning("TG限流（answer），等待 %d 秒", e.retry_after)
+        await callback.answer(f"被TG限流，请{e.retry_after}秒后再试", show_alert=True)
 
 
 async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -161,7 +177,7 @@ async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, Inlin
         reg_daily_delta = -(2 + (1 if profile.work_hours <= 6 else 0))
 
     if training_info["active"]:
-        train_status = "生效中"
+        train_status = "✅ 生效中"
         train_mult = f"×{training_info['income_mult']:.2f}"
         expires_at = training_info.get("expires_at")
         if expires_at:
@@ -170,13 +186,29 @@ async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, Inlin
             remain = max(0, int((expires_at - now_utc).total_seconds()))
             train_tail = f" | 剩余 {fmt_duration(remain)}"
     elif profile.training_level != "none" and profile.training_expires_at:
-        train_status = "已过期"
+        train_status = "⚠️ 已过期"
         train_mult = "×1.00"
         train_tail = ""
     else:
-        train_status = "无"
+        train_status = "❌ 无"
         train_mult = "×1.00"
         train_tail = ""
+
+    # Work hours status indicator
+    if profile.work_hours == LEGAL_WORK_HOURS:
+        work_status = "✅"
+    elif profile.work_hours > LEGAL_WORK_HOURS:
+        work_status = "⚠️"
+    else:
+        work_status = "📉"
+
+    # Office level indicator
+    office_levels = {"standard": "🔹", "premium": "🔷", "luxury": "💎"}
+    office_badge = office_levels.get(profile.office_level, "🔹")
+
+    # Insurance level indicator
+    ins_badges = {"basic": "🔹", "plus": "🔷", "supreme": "💎"}
+    ins_badge = ins_badges.get(profile.insurance_level, "🔹")
 
     product_income = int(company.daily_revenue * multipliers["income_mult"] * market["income_mult"])
     if battle_debuff_rate > 0:
@@ -298,10 +330,11 @@ async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, Inlin
         f"👥 员工：{company.employee_count}/{max_employees}\n"
         f"💰 积分余额：{fmt_quota(company.cp_points)}\n"
         f"😐 道德：{profile.ethics} [{bar10(profile.ethics, -100, 100)}] {ethics_rating(profile.ethics)}\n"
-        f"⏰ 工时：{profile.work_hours}h {work_info['label']} | 营收×{work_info['income_mult']:.2f} | 成本×{work_info['cost_mult']:.2f} | 道德{work_info['ethics_delta']:+d}/日\n"
-        f"🏢 办公：{office_info['name']} | 营收×{office_info['income_mult']:.2f} | 办公开销 {office_info['employee_cost']}/人/日\n"
-        f"🏅 培训：{training_info['name']}（{train_status}）| 营收{train_mult}{train_tail}\n"
-        f"👑 保险：{insurance_info['name']} | 罚款减免 {int(insurance_info['fine_reduction'] * 100)}% | 费率 {insurance_info['cost_rate'] * 100:.1f}%\n"
+        f"⏰ 工时：{profile.work_hours}h {work_status} {work_info['label']}\n"
+        f"   营收×{work_info['income_mult']:.2f} | 成本×{work_info['cost_mult']:.2f} | 道德{work_info['ethics_delta']:+d}/日\n"
+        f"🏢 办公：{office_badge} {office_info['name']} | 营收×{office_info['income_mult']:.2f} | {office_info['employee_cost']}/人/日\n"
+        f"🏅 培训：{training_info['name']} {train_status} | 营收{train_mult}{train_tail}\n"
+        f"👑 保险：{ins_badge} {insurance_info['name']} | 减免{int(insurance_info['fine_reduction'] * 100)}% | 费率{insurance_info['cost_rate'] * 100:.1f}%\n"
         f"🎭 文化：{profile.culture}/100 [{bar10(profile.culture)}] | 营收+{culture_income_rate*100:.1f}% | 风险-{culture_risk_reduce_rate*100:.1f}%\n"
         f"🛂 监管：{profile.regulation_pressure}/100 [{bar10(profile.regulation_pressure)}] | 每日变化 {reg_daily_delta:+d}\n"
         f"\n"

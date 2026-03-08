@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware, types
@@ -17,20 +18,34 @@ MAINTENANCE_PIN_KEY = "maintenance:pin"
 COMPENSATION_PIN_KEY = "maintenance:compensation:pin"
 MAINTENANCE_COMPENSATION_BONUS = 500
 
+# Local cache to avoid querying Redis on every event
+_maintenance_cache: dict[str, Any] = {"value": False, "ts": 0.0}
+_CACHE_TTL = 10  # seconds
+
 
 async def is_maintenance_mode() -> bool:
+    now = time.monotonic()
+    if now - _maintenance_cache["ts"] < _CACHE_TTL:
+        return _maintenance_cache["value"]
     r = await get_redis()
-    return bool(await r.exists(MAINTENANCE_MODE_KEY))
+    result = bool(await r.exists(MAINTENANCE_MODE_KEY))
+    _maintenance_cache["value"] = result
+    _maintenance_cache["ts"] = now
+    return result
 
 
 async def set_maintenance_mode(payload: dict[str, Any]) -> None:
     r = await get_redis()
     await r.set(MAINTENANCE_MODE_KEY, json.dumps(payload, ensure_ascii=False))
+    _maintenance_cache["value"] = True
+    _maintenance_cache["ts"] = time.monotonic()
 
 
 async def clear_maintenance_mode() -> None:
     r = await get_redis()
     await r.delete(MAINTENANCE_MODE_KEY)
+    _maintenance_cache["value"] = False
+    _maintenance_cache["ts"] = time.monotonic()
 
 
 def parse_command_name(text: str | None) -> str:

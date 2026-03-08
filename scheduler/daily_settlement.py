@@ -11,7 +11,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select, text
+from sqlalchemy import func as sqlfunc, select, text
 
 from config import settings
 from db.engine import async_session, engine
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 _scheduler: AsyncIOScheduler | None = None
 _bot_ref = None  # will be set at startup
-_BACKUP_DIR = Path(".")
+_BACKUP_DIR = Path(__file__).resolve().parent.parent / "db_backup"
 
 
 def set_bot(bot):
@@ -53,6 +53,54 @@ def _rotate_old_backups(keep_files: int):
         return
     for old_file in files[:overflow]:
         old_file.unlink(missing_ok=True)
+
+
+async def _upload_to_webdav(file_path: Path) -> bool:
+    """Upload a backup file to WebDAV. Returns True on success."""
+    url = settings.webdav_backup_url
+    if not url or not settings.webdav_backup_username:
+        return False
+
+    import aiohttp
+    import base64
+
+    remote_url = f"{url.rstrip('/')}/db_backup/{file_path.name}"
+    creds = base64.b64encode(
+        f"{settings.webdav_backup_username}:{settings.webdav_backup_password}".encode()
+    ).decode()
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Ensure db_backup directory exists on WebDAV (MKCOL)
+            dir_url = f"{url.rstrip('/')}/db_backup/"
+            async with session.request(
+                "MKCOL", dir_url,
+                headers={"Authorization": f"Basic {creds}"},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as dir_resp:
+                # 201=created, 405/409=already exists — both fine
+                pass
+
+            with open(file_path, "rb") as f:
+                data = f.read()
+            async with session.put(
+                remote_url,
+                data=data,
+                headers={
+                    "Authorization": f"Basic {creds}",
+                    "Content-Type": "application/gzip",
+                },
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as resp:
+                if resp.status in (200, 201, 204):
+                    logger.info("WebDAV upload OK: %s -> %s", file_path.name, remote_url)
+                    return True
+                body = await resp.text()
+                logger.warning("WebDAV upload failed %d: %s", resp.status, body[:200])
+                return False
+    except Exception:
+        logger.exception("WebDAV upload error for %s", file_path.name)
+        return False
 
 
 async def _create_db_backup() -> tuple[Path, dict[str, int]]:
@@ -106,17 +154,27 @@ async def _backup_job():
         total_rows = sum(table_counts.values())
         summary = ", ".join(f"{name}:{count}" for name, count in sorted(table_counts.items()))
         logger.info("DB backup completed: %s rows=%d", file_path, total_rows)
+
+        # Upload to WebDAV
+        webdav_ok = await _upload_to_webdav(file_path)
+        webdav_status = "☁️ WebDAV: 已上传" if webdav_ok else ""
+        if settings.webdav_backup_url and not webdav_ok:
+            webdav_status = "⚠️ WebDAV: 上传失败"
+
         await add_stream_event(
             "backup_completed",
             {"file": str(file_path), "rows": total_rows, "tables": table_counts},
         )
-        await _notify_backup_status(
-            "🛡 my_company 自动备份完成\n"
-            f"⏰ 北京时间: {format_bj_now()}\n"
-            f"📦 文件: {file_path}\n"
-            f"🧾 总行数: {total_rows}\n"
+        notify_lines = [
+            "🛡 my_company 自动备份完成",
+            f"⏰ 北京时间: {format_bj_now()}",
+            f"📦 文件: {file_path}",
+            f"🧾 总行数: {total_rows}",
             f"📚 分表: {summary}",
-        )
+        ]
+        if webdav_status:
+            notify_lines.append(webdav_status)
+        await _notify_backup_status("\n".join(notify_lines))
     except Exception as exc:
         logger.exception("DB backup failed")
         await add_stream_event("backup_failed", {"error": str(exc)})
@@ -181,7 +239,8 @@ async def _research_realtime_job():
                     select(Company).where(Company.id.in_(active_company_ids))
                 )
             ).scalars().all()
-            tick_now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+            # LOCALTIMESTAMP returns naive timestamp matching started_at storage
+            tick_now = (await session.execute(select(text("LOCALTIMESTAMP")))).scalar()
             for company in companies:
                 completed = await check_and_complete_research(
                     session,
@@ -233,7 +292,7 @@ def start_scheduler():
     _scheduler.add_job(
         _research_realtime_job,
         "interval",
-        minutes=1,
+        minutes=5,
         id="research_realtime_settlement",
     )
     _scheduler.start()

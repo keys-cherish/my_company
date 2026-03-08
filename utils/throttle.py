@@ -43,9 +43,11 @@ class ThrottleMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         r = await get_redis()
-        current = await r.incr(key)
-        if current == 1:
-            await r.expire(key, RATE_WINDOW)
+        async with r.pipeline(transaction=False) as pipe:
+            pipe.incr(key)
+            pipe.expire(key, RATE_WINDOW)
+            results = await pipe.execute()
+        current = results[0]
 
         if current > limit:
             if isinstance(event, CallbackQuery):

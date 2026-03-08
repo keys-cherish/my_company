@@ -191,7 +191,10 @@ async def cb_menu_profile(callback: types.CallbackQuery):
         f"🏢 公司: {company_names}\n"
     )
 
-    await callback.message.edit_text(text, reply_markup=main_menu_kb(tg_id=callback.from_user.id))
+    try:
+        await callback.message.edit_text(text, reply_markup=main_menu_kb(tg_id=callback.from_user.id))
+    except Exception:
+        pass
     await callback.answer()
 
 

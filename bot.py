@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -16,10 +17,13 @@ from config import settings
 from db.engine import init_db
 from cache.points_redis_client import close_points_redis
 from cache.redis_client import close_redis
-from scheduler.daily_settlement import set_bot, start_scheduler, stop_scheduler
+from scheduler.daily_settlement import set_bot, start_scheduler, stop_scheduler, _create_db_backup, _upload_to_webdav
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+# 热重载模式标记（跳过昂贵初始化）
+_RELOAD_MODE = os.environ.get("_BOT_RELOAD") == "1"
 
 
 def _register_routers(dp: Dispatcher):
@@ -107,6 +111,7 @@ def _register_routers(dp: Dispatcher):
             "/cp_makeup",
             "/cp_give",
             "/cp_welfare",
+            "/cp_undo",
             "/cp_quest",
             "/cp_cleanup",
             "/cp_maintain",
@@ -135,23 +140,24 @@ async def main():
     )
     dp = Dispatcher(storage=MemoryStorage())
 
-    # 初始化数据库
-    await init_db()
-    logger.info("数据库初始化完成")
-
-    # 启动时批量无损合并：本地个人积分 + 共享积分
-    from services.user_service import sync_all_users_to_shared_points
-    total_users, changed_users = await sync_all_users_to_shared_points()
-    logger.info("共享积分同步完成: users=%d, changed=%d", total_users, changed_users)
+    # 初始化数据库（热重载时跳过，表已存在）
+    if not _RELOAD_MODE:
+        await init_db()
+        logger.info("数据库初始化完成")
+    else:
+        logger.info("热重载模式，跳过数据库初始化")
 
     # 注册处理器
     _register_routers(dp)
 
     # 注册限流中间件
     from utils.throttle import ThrottleMiddleware
-    from utils.topic_gate import TopicGateMiddleware
+    from utils.topic_gate import TopicGateMiddleware, TelegramErrorGuardMiddleware
     from utils.maintenance import MaintenanceModeMiddleware
     from utils.stream_event import StreamEventMiddleware
+    # TelegramErrorGuardMiddleware 最外层：捕获限流/过期回调等常见TG错误
+    dp.message.middleware(TelegramErrorGuardMiddleware())
+    dp.callback_query.middleware(TelegramErrorGuardMiddleware())
     dp.message.middleware(TopicGateMiddleware())
     dp.callback_query.middleware(TopicGateMiddleware())
     dp.message.middleware(MaintenanceModeMiddleware())
@@ -165,9 +171,23 @@ async def main():
     from utils.panel_auth import PanelOwnerMiddleware
     dp.callback_query.outer_middleware(PanelOwnerMiddleware())
 
-    # 注册Bot命令列表（Telegram输入框命令提示）
-    from handlers.start import BOT_COMMANDS
-    await bot.set_my_commands(BOT_COMMANDS)
+    # 后台执行耗时初始化（热重载时跳过）
+    if not _RELOAD_MODE:
+        async def _deferred_init():
+            try:
+                from services.user_service import sync_all_users_to_shared_points
+                total_users, changed_users = await sync_all_users_to_shared_points()
+                logger.info("共享积分同步完成: users=%d, changed=%d", total_users, changed_users)
+            except Exception:
+                logger.exception("共享积分同步失败")
+            try:
+                from handlers.start import BOT_COMMANDS
+                await bot.set_my_commands(BOT_COMMANDS)
+                logger.info("Bot命令列表注册完成")
+            except Exception:
+                logger.exception("Bot命令列表注册失败")
+
+        asyncio.create_task(_deferred_init())
 
     # 启动定时任务
     set_bot(bot)
@@ -217,8 +237,25 @@ async def main():
             await asyncio.Event().wait()
         else:
             logger.info("机器人启动中（polling）...")
-            await dp.start_polling(bot)
+            await dp.start_polling(
+                bot,
+                polling_timeout=30,
+                backoff_on_timeout=5,
+                drop_pending_updates=True,   # 重启后不处理积压消息，避免限流
+            )
     finally:
+        # 关闭前强制备份数据库（热重载时跳过）
+        if not _RELOAD_MODE:
+            try:
+                file_path, table_counts = await _create_db_backup()
+                total_rows = sum(table_counts.values())
+                logger.info("关闭前备份完成: %s (共%d行)", file_path, total_rows)
+                # 上传到 WebDAV
+                if await _upload_to_webdav(file_path):
+                    logger.info("关闭前备份已上传 WebDAV")
+            except Exception:
+                logger.exception("关闭前备份失败")
+
         if effective_mode == "webhook":
             try:
                 await bot.delete_webhook(drop_pending_updates=False)
@@ -257,6 +294,20 @@ def _install_uvloop() -> bool:
 
 
 if __name__ == "__main__":
-    if _install_uvloop():
-        logger.info("uvloop 已启用（高性能事件循环）")
-    asyncio.run(main())
+    import sys
+
+    if "--reload" in sys.argv:
+        from watchfiles import run_process
+
+        logger.info("热重载模式启动，监听 .py 文件变更...")
+        # 子进程中设置快速启动标记
+        os.environ["_BOT_RELOAD"] = "1"
+        run_process(
+            ".",
+            target=lambda: asyncio.run(main()),
+            watch_filter=lambda change, path: path.endswith(".py"),
+        )
+    else:
+        if _install_uvloop():
+            logger.info("uvloop 已启用（高性能事件循环）")
+        asyncio.run(main())
