@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 
 from aiogram import F, Router, types
-from sqlalchemy import func as sqlfunc, select, text
+from sqlalchemy import func as sqlfunc, select, text as sa_text
 
 from db.engine import async_session
 from keyboards.menus import tech_list_kb, tag_kb
@@ -84,7 +84,7 @@ async def cb_research_list(callback: types.CallbackQuery, company_id: int | None
         available = await get_available_techs(session, company_id)
         # LOCALTIMESTAMP returns TIMESTAMP WITHOUT TIME ZONE in the session's
         # timezone, matching how started_at is stored (via server_default=now()).
-        now_db = (await session.execute(select(text("LOCALTIMESTAMP")))).scalar()
+        now_db = (await session.execute(select(sa_text("LOCALTIMESTAMP")))).scalar()
         if now_db is None:
             now_db = dt.datetime.utcnow()
 
