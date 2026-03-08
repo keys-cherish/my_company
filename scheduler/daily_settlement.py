@@ -151,27 +151,17 @@ async def _backup_job():
         total_rows = sum(table_counts.values())
         summary = ", ".join(f"{name}:{count}" for name, count in sorted(table_counts.items()))
         logger.info("DB backup completed: %s rows=%d", file_path, total_rows)
-
-        # Upload to WebDAV
-        webdav_ok = await _upload_to_webdav(file_path)
-        webdav_status = "☁️ WebDAV: 已上传" if webdav_ok else ""
-        if settings.webdav_backup_url and not webdav_ok:
-            webdav_status = "⚠️ WebDAV: 上传失败"
-
         await add_stream_event(
             "backup_completed",
             {"file": str(file_path), "rows": total_rows, "tables": table_counts},
         )
-        notify_lines = [
-            "🛡 my_company 自动备份完成",
-            f"⏰ 北京时间: {format_bj_now()}",
-            f"📦 文件: {file_path}",
-            f"🧾 总行数: {total_rows}",
+        await _notify_backup_status(
+            "🛡 my_company 自动备份完成\n"
+            f"⏰ 北京时间: {format_bj_now()}\n"
+            f"📦 文件: {file_path}\n"
+            f"🧾 总行数: {total_rows}\n"
             f"📚 分表: {summary}",
-        ]
-        if webdav_status:
-            notify_lines.append(webdav_status)
-        await _notify_backup_status("\n".join(notify_lines))
+        )
     except Exception as exc:
         logger.exception("DB backup failed")
         await add_stream_event("backup_failed", {"error": str(exc)})
