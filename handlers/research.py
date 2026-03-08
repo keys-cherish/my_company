@@ -23,7 +23,6 @@ from services.research_service import (
 )
 from services.user_service import get_user_by_tg_id
 from utils.formatters import fmt_duration
-from utils.timezone import naive_utc_to_bj
 
 router = Router()
 
@@ -130,8 +129,8 @@ async def cb_research_list(callback: types.CallbackQuery, company_id: int | None
             started = rp.started_at.replace(tzinfo=None) if rp.started_at.tzinfo else rp.started_at
             elapsed = max(0.0, (now - started).total_seconds())
             remaining = max(0, int(duration_sec - elapsed))
-            # 格式化开始时间
-            start_display = naive_utc_to_bj(rp.started_at).strftime("%m-%d %H:%M")
+            # started_at 已经是北京时间（PostgreSQL timezone=Asia/Shanghai），直接格式化
+            start_display = started.strftime("%m-%d %H:%M")
             if remaining > 0:
                 lines.append(
                     f"  • {name}\n"
