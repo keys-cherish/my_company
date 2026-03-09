@@ -208,8 +208,13 @@ async def main():
     try:
         if effective_mode == "webhook":
             webhook_url = f"{settings.webhook_base_url.rstrip('/')}{settings.webhook_path}"
+            cert_file = None
+            if settings.webhook_cert_path:
+                from aiogram.types import FSInputFile
+                cert_file = FSInputFile(settings.webhook_cert_path)
             await bot.set_webhook(
                 url=webhook_url,
+                certificate=cert_file,
                 secret_token=settings.webhook_secret_token or None,
                 drop_pending_updates=True,
             )
@@ -225,7 +230,13 @@ async def main():
 
             runner = web.AppRunner(app)
             await runner.setup()
-            site = web.TCPSite(runner, host=settings.webhook_host, port=settings.webhook_port)
+            ssl_ctx = None
+            if settings.webhook_cert_path:
+                import ssl
+                ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                key_path = settings.webhook_cert_path.replace("public.pem", "private.key")
+                ssl_ctx.load_cert_chain(settings.webhook_cert_path, key_path)
+            site = web.TCPSite(runner, host=settings.webhook_host, port=settings.webhook_port, ssl_context=ssl_ctx)
             await site.start()
             logger.info(
                 "Webhook started at %s%s (listen %s:%d)",

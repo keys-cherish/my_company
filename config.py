@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     webhook_host: str = "0.0.0.0"
     webhook_port: int = 8080
     webhook_secret_token: str = ""
+    webhook_cert_path: str = ""  # 自签名证书路径，裸IP时需要
     api_host: str = "0.0.0.0"
     api_port: int = 8090
     # Comma-separated list of allowed chat_ids (group/subchannel) where commands work.
