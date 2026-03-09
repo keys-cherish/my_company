@@ -94,10 +94,9 @@ uv run python bot.py
 - `DB_POOL_SIZE` / `DB_MAX_OVERFLOW`：数据库连接池容量（默认 `12/16`，小机更稳）
 - `DB_POOL_TIMEOUT_SECONDS` / `DB_POOL_RECYCLE_SECONDS`：连接池获取超时与连接回收时间
 - `REDIS_URL`：Redis 连接
-- `RUN_MODE`：运行模式（`polling` / `webhook`）
+- `BOT`：运行模式固定为 `polling`
 - `USE_UVLOOP`：是否启用 uvloop
 - `APP_TIMEZONE`：时区（默认 `Asia/Shanghai`，北京时间）
-- `WEBHOOK_BASE_URL` / `WEBHOOK_PATH` / `WEBHOOK_PORT`：Webhook 模式配置
 - `REDIS_STREAM_ENABLED` / `REDIS_STREAM_KEY`：Redis Stream 事件通道配置
 - `ADMIN_TG_IDS`：管理员 TG ID 列表（逗号分隔）
 - `SUPER_ADMIN_TG_ID` / `SUPER_ADMIN_TG_IDS`：超级管理员（支持单个或多个）
@@ -228,7 +227,7 @@ uv run pytest -q tests/test_regulation_audit.py tests/test_dividend_distribution
 
 低配单机（1C/2G）建议使用以下策略：
 
-1. **单实例**：`RUN_MODE=webhook`，避免 polling 长连接开销。
+1. **单实例**：固定使用 `polling`，同一 token 仅运行一个 bot 进程。
 2. **API 单进程**：Mini App API 保持 `workers=1`（当前已如此）。
 3. **保守连接池**：建议 `DB_POOL_SIZE=4~8`，`DB_MAX_OVERFLOW=4~8`。
 4. **缓存优先**：高频读取走 Redis（预加载/冷却/排行榜）。
@@ -239,7 +238,6 @@ uv run pytest -q tests/test_regulation_audit.py tests/test_dividend_distribution
 参考参数（小机）：
 
 ```env
-RUN_MODE=webhook
 DB_POOL_SIZE=6
 DB_MAX_OVERFLOW=6
 DB_POOL_TIMEOUT_SECONDS=30

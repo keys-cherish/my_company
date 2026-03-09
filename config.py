@@ -9,15 +9,8 @@ class Settings(BaseSettings):
     # Telegram
     bot_token: str = ""
     proxy_url: str = ""  # HTTP代理，如 http://127.0.0.1:7890
-    run_mode: str = "webhook"  # polling / webhook
     use_uvloop: bool = True
     app_timezone: str = "Asia/Shanghai"
-    webhook_base_url: str = ""  # 例如: https://example.com
-    webhook_path: str = "/telegram/webhook"
-    webhook_host: str = "0.0.0.0"
-    webhook_port: int = 8080
-    webhook_secret_token: str = ""
-    webhook_cert_path: str = ""  # 自签名证书路径，裸IP时需要
     api_host: str = "0.0.0.0"
     api_port: int = 8090
     # Comma-separated list of allowed chat_ids (group/subchannel) where commands work.
