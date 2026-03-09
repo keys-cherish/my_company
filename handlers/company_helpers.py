@@ -46,6 +46,7 @@ from services.operations_service import (
     load_recent_events,
     reputation_rating,
 )
+from services.product_service import get_max_products
 from services.realestate_service import get_total_estate_income
 from services.research_service import (
     get_effective_research_duration_seconds,
@@ -353,7 +354,7 @@ async def render_company_detail(company_id: int, tg_id: int) -> tuple[str, Inlin
         f"   详细说明请查看「✨ Buff一览」\n"
         f"{'─' * 24}\n"
         f"{research_block}"
-        f"📦 产品（{prod_count}个）：\n"
+        f"📦 产品（{prod_count}/{get_max_products(company.level)}个）：\n"
         f"{chr(10).join(products_block)}\n\n"
         f"📋 最近事件：\n"
         f"{chr(10).join(events_block)}\n"
