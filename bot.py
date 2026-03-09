@@ -273,6 +273,13 @@ async def main():
             await asyncio.Event().wait()
         else:
             logger.info("机器人启动中（polling）...")
+            # Polling and webhook are mutually exclusive on Telegram side.
+            # Clear stale webhook before polling startup to avoid Conflict errors.
+            try:
+                await bot.delete_webhook(drop_pending_updates=True)
+                logger.info("Polling mode: ensured webhook is deleted before getUpdates")
+            except Exception:
+                logger.exception("Polling mode: failed to delete webhook before start_polling")
             await dp.start_polling(
                 bot,
                 polling_timeout=30,
