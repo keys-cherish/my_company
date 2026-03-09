@@ -10,6 +10,7 @@ import subprocess
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.fsm.storage.base import BaseStorage
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiohttp import web
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
@@ -25,6 +26,27 @@ logger = logging.getLogger(__name__)
 
 # 热重载模式标记（跳过昂贵初始化）
 _RELOAD_MODE = os.environ.get("_BOT_RELOAD") == "1"
+
+
+def _build_fsm_storage() -> BaseStorage:
+    """Prefer Redis FSM storage to avoid long-running in-process memory growth."""
+    redis_url = (settings.redis_url or "").strip()
+    if not redis_url:
+        logger.info("FSM storage: memory")
+        return MemoryStorage()
+
+    try:
+        import redis.asyncio as aioredis
+        from aiogram.fsm.storage.redis import RedisStorage
+
+        redis_client = aioredis.from_url(redis_url)
+        # Expire stale state/data so abandoned conversations do not accumulate forever.
+        storage = RedisStorage(redis=redis_client, state_ttl=24 * 3600, data_ttl=24 * 3600)
+        logger.info("FSM storage: redis")
+        return storage
+    except Exception:
+        logger.exception("Failed to initialize Redis FSM storage, falling back to memory")
+        return MemoryStorage()
 
 
 def _register_routers(dp: Dispatcher):
@@ -139,7 +161,7 @@ async def main():
         session=AiohttpSession(proxy=settings.proxy_url) if settings.proxy_url else None,
         default=DefaultBotProperties(parse_mode=None),
     )
-    dp = Dispatcher(storage=MemoryStorage())
+    dp = Dispatcher(storage=_build_fsm_storage())
 
     # 初始化数据库（热重载时跳过，表已存在）
     if not _RELOAD_MODE:
@@ -287,6 +309,10 @@ async def main():
                     await runner.cleanup()
                 except Exception:
                     pass
+        try:
+            await dp.storage.close()
+        except Exception:
+            pass
         stop_scheduler()
         await close_redis()
         await close_points_redis()

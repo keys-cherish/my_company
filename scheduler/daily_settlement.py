@@ -6,12 +6,13 @@ import datetime as dt
 import gzip
 import json
 import logging
+from collections.abc import AsyncIterator
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import func as sqlfunc, select, text
+from sqlalchemy import select, text
 
 from config import settings
 from db.engine import async_session, engine
@@ -39,9 +40,20 @@ def _json_safe(value):
     return value
 
 
-def _write_backup_file(path: Path, payload: dict):
-    with gzip.open(path, "wt", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False)
+async def _iter_table_rows(conn, table_name: str) -> AsyncIterator[dict]:
+    """Iterate table rows with streaming when the DB driver supports it."""
+    stmt = text(f'SELECT * FROM "{table_name}"')
+    try:
+        stream_result = await conn.stream(stmt)
+    except Exception:
+        # Fallback for dialects that do not implement streaming cursors.
+        result = await conn.execute(stmt)
+        for row in result.mappings():
+            yield row
+        return
+
+    async for row in stream_result.mappings():
+        yield row
 
 
 def _rotate_old_backups(keep_files: int):
@@ -82,19 +94,18 @@ async def _upload_to_webdav(file_path: Path) -> bool:
                     pass  # 201=created, 405/409=already exists
 
             with open(file_path, "rb") as f:
-                data = f.read()
-            async with session.put(
-                remote_url,
-                data=data,
-                headers={**auth_header, "Content-Type": "application/gzip"},
-                timeout=aiohttp.ClientTimeout(total=120),
-            ) as resp:
-                if resp.status in (200, 201, 204):
-                    logger.info("WebDAV upload OK: %s -> %s", file_path.name, remote_url)
-                    return True
-                body = await resp.text()
-                logger.warning("WebDAV upload failed %d: %s", resp.status, body[:200])
-                return False
+                async with session.put(
+                    remote_url,
+                    data=f,
+                    headers={**auth_header, "Content-Type": "application/gzip"},
+                    timeout=aiohttp.ClientTimeout(total=600),
+                ) as resp:
+                    if resp.status in (200, 201, 204):
+                        logger.info("WebDAV upload OK: %s -> %s", file_path.name, remote_url)
+                        return True
+                    body = await resp.text()
+                    logger.warning("WebDAV upload failed %d: %s", resp.status, body[:200])
+                    return False
     except Exception:
         logger.exception("WebDAV upload error for %s", file_path.name)
         return False
@@ -107,24 +118,46 @@ async def _create_db_backup() -> tuple[Path, dict[str, int]]:
     now_bj = dt.datetime.now(BJ_TZ)
     file_path = _BACKUP_DIR / f"my_company_backup_{now_bj.strftime('%Y%m%dT%H%M%S%z')}.json.gz"
 
-    table_data: dict[str, list[dict]] = {}
     table_counts: dict[str, int] = {}
 
-    async with engine.connect() as conn:
-        for table in Base.metadata.sorted_tables:
-            result = await conn.execute(text(f'SELECT * FROM "{table.name}"'))
-            rows = []
-            for row in result.mappings().all():
-                rows.append({k: _json_safe(v) for k, v in row.items()})
-            table_data[table.name] = rows
-            table_counts[table.name] = len(rows)
+    # Stream directly to gzip JSON to avoid loading the whole DB snapshot in memory.
+    with gzip.open(file_path, "wt", encoding="utf-8") as f:
+        f.write("{")
+        f.write('"project":')
+        json.dump("my_company", f, ensure_ascii=False)
+        f.write(',"created_at_bj":')
+        json.dump(now_bj.isoformat(), f, ensure_ascii=False)
+        f.write(',"tables":{')
 
-    payload = {
-        "project": "my_company",
-        "created_at_bj": now_bj.isoformat(),
-        "tables": table_data,
-    }
-    _write_backup_file(file_path, payload)
+        first_table = True
+        async with engine.connect() as conn:
+            for table in Base.metadata.sorted_tables:
+                if not first_table:
+                    f.write(",")
+                first_table = False
+
+                json.dump(table.name, f, ensure_ascii=False)
+                f.write(":[")
+
+                first_row = True
+                row_count = 0
+                async for row in _iter_table_rows(conn, table.name):
+                    if not first_row:
+                        f.write(",")
+                    first_row = False
+                    json.dump(
+                        {k: _json_safe(v) for k, v in row.items()},
+                        f,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    row_count += 1
+
+                f.write("]")
+                table_counts[table.name] = row_count
+
+        f.write("}}")
+
     _rotate_old_backups(settings.backup_keep_files)
     return file_path, table_counts
 
@@ -277,10 +310,11 @@ def start_scheduler():
     if settings.backup_enabled and settings.backup_interval_minutes > 0:
         _scheduler.add_job(
             _backup_job,
-            "cron",
-            hour="*/3",
-            minute=0,
+            "interval",
+            minutes=settings.backup_interval_minutes,
             id="db_backup",
+            coalesce=True,
+            max_instances=1,
         )
     _scheduler.add_job(
         _research_realtime_job,
@@ -297,7 +331,8 @@ def start_scheduler():
     )
     if settings.backup_enabled and settings.backup_interval_minutes > 0:
         logger.info(
-            "Scheduler started: DB backup every 3 hours on the hour (%s, keep %d files)",
+            "Scheduler started: DB backup every %d minute(s) (%s, keep %d files)",
+            settings.backup_interval_minutes,
             settings.app_timezone,
             settings.backup_keep_files,
         )
