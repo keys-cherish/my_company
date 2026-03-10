@@ -19,6 +19,7 @@ def _is_allowed_group_topic(chat_id: int, chat_username: str | None, thread_id: 
     allowed_chat_ids = settings.allowed_chat_id_set
     allowed_chat_usernames = settings.allowed_chat_username_set
     allowed_thread_ids = settings.allowed_topic_thread_id_set
+    restricted_thread_ids = set(settings.topic_command_restriction_map.keys())
 
     if allowed_chat_ids and chat_id in allowed_chat_ids:
         chat_allowed = True
@@ -28,7 +29,9 @@ def _is_allowed_group_topic(chat_id: int, chat_username: str | None, thread_id: 
 
     if (allowed_chat_ids or allowed_chat_usernames) and not chat_allowed:
         return False
-    if allowed_thread_ids and thread_id not in allowed_thread_ids:
+    # restricted topics are also "allowed" (command filtering handled separately)
+    all_allowed_threads = allowed_thread_ids | restricted_thread_ids
+    if all_allowed_threads and thread_id not in all_allowed_threads:
         return False
     return True
 
@@ -38,7 +41,15 @@ def _restriction_enabled() -> bool:
         bool(settings.allowed_chat_id_set)
         or bool(settings.allowed_chat_username_set)
         or bool(settings.allowed_topic_thread_id_set)
+        or bool(settings.topic_command_restriction_map)
     )
+
+
+def _get_restricted_commands(thread_id: int | None) -> set[str] | None:
+    """Return allowed command set for a restricted topic, or None if unrestricted."""
+    if thread_id is None:
+        return None
+    return settings.topic_command_restriction_map.get(thread_id)
 
 
 class TopicGateMiddleware(BaseMiddleware):
@@ -65,6 +76,20 @@ class TopicGateMiddleware(BaseMiddleware):
                 if text.startswith("/"):
                     await event.answer("❌ 仅允许在指定话题频道使用本机器人。")
                 return None
+
+            # Check per-topic command restriction
+            allowed_cmds = _get_restricted_commands(thread_id)
+            if allowed_cmds is not None:
+                text = (event.text or "").strip()
+                if text.startswith("/"):
+                    # Extract command name: "/cp_demon@botname arg" -> "cp_demon"
+                    cmd = text.split()[0].lstrip("/").split("@")[0]
+                    if cmd not in allowed_cmds:
+                        await event.answer(f"❌ 本话题仅支持: {', '.join('/' + c for c in sorted(allowed_cmds))}")
+                        return None
+                else:
+                    return None  # non-command text blocked in restricted topics
+
             return await handler(event, data)
 
         if isinstance(event, CallbackQuery) and event.message:
@@ -77,6 +102,7 @@ class TopicGateMiddleware(BaseMiddleware):
             ):
                 await event.answer("❌ 仅允许在指定话题频道使用本机器人。", show_alert=True)
                 return None
+            # Callbacks in restricted topics are allowed (buttons come from allowed commands)
             return await handler(event, data)
 
         return await handler(event, data)

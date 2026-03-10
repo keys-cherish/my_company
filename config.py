@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     allowed_topic_thread_ids: str = ""
     # 兼容旧配置：单个论坛话题ID（message_thread_id）。0 表示不限制。
     allowed_topic_thread_id: int = 0
+    # 话题命令限制：格式 topic_id:cmd1+cmd2,topic_id2:cmd3
+    # 例如 "48629:cp_demon,13434:cp_checkin+cp_start"
+    # 该话题只允许指定命令和对应的回调按钮
+    topic_command_restrictions: str = ""
 
     # Database
     database_url: str = "postgresql+asyncpg://mycompany:mycompany@localhost:5432/mycompany"
@@ -208,6 +212,23 @@ class Settings(BaseSettings):
         if self.allowed_topic_thread_id > 0:
             ids.add(self.allowed_topic_thread_id)
         return ids
+
+    @property
+    def topic_command_restriction_map(self) -> dict[int, set[str]]:
+        """Parse 'topic_id:cmd1+cmd2,topic_id2:cmd3' into {topic_id: {cmd1, cmd2}}."""
+        raw = self.topic_command_restrictions.strip()
+        if not raw:
+            return {}
+        result: dict[int, set[str]] = {}
+        for entry in raw.split(","):
+            entry = entry.strip()
+            if ":" not in entry:
+                continue
+            tid_str, cmds_str = entry.split(":", 1)
+            tid = int(tid_str.strip())
+            cmds = {c.strip().lstrip("/") for c in cmds_str.split("+") if c.strip()}
+            result[tid] = cmds
+        return result
 
 
 settings = Settings()
