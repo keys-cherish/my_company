@@ -445,14 +445,33 @@ async def cb_roulette_join(callback: types.CallbackQuery):
         await callback.answer(msg, show_alert=True)
         return
 
-    text = render_game_panel(state, tg_id)
-    kb = _waiting_kb(room_id, state.creator_tg_id)
-    try:
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        sent = await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
-        await mark_panel(sent.chat.id, sent.message_id, tg_id)
-    await callback.answer(msg)
+    # Auto-start when room is full (3 players)
+    if len(state.players) >= 3:
+        ok2, msg2, state2 = await start_game(room_id=room_id, tg_id=state.creator_tg_id, solo_vs_devil=False)
+        if ok2 and state2:
+            state = state2
+
+    if state.phase == "playing":
+        text = render_game_panel(state, tg_id)
+        kb = _game_kb(state, tg_id)
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            sent = await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+            await mark_panel(sent.chat.id, sent.message_id, tg_id)
+        await callback.answer("房间已满，游戏开始!")
+
+        if _current_turn_tg_id(state) == DEVIL_TG_ID:
+            await _animate_devil_turn(callback, room_id, tg_id)
+    else:
+        text = render_game_panel(state, tg_id)
+        kb = _waiting_kb(room_id, state.creator_tg_id)
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            sent = await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+            await mark_panel(sent.chat.id, sent.message_id, tg_id)
+        await callback.answer(msg)
 
 
 @router.callback_query(F.data.startswith("roulette:begin:"))

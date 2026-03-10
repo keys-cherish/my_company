@@ -145,7 +145,7 @@ class GameState:
     turn_index: int = 0
     turn_order: list[int] = field(default_factory=list)
     action_log: list[str] = field(default_factory=list)
-    handcuffed_tg_id: int = 0
+    handcuffed_tg_ids: list[int] = field(default_factory=list)
     winner_tg_id: int = 0
     live_count: int = 0
     blank_count: int = 0
@@ -157,7 +157,12 @@ class GameState:
 
     @staticmethod
     def from_json(raw: str) -> GameState:
-        return GameState(**json.loads(raw))
+        data = json.loads(raw)
+        # Backward compat: migrate old handcuffed_tg_id (int) → handcuffed_tg_ids (list)
+        old_val = data.pop("handcuffed_tg_id", None)
+        if "handcuffed_tg_ids" not in data:
+            data["handcuffed_tg_ids"] = [old_val] if old_val else []
+        return GameState(**data)
 
 
 def _get_player(state: GameState, tg_id: int) -> dict | None:
@@ -210,10 +215,8 @@ async def _cleanup_room(room_id: str, player_tg_ids: list[int]) -> None:
 def _init_round(state: GameState) -> list[str]:
     """Initialize a new round and return round messages."""
     rnd = state.current_round
-    if rnd >= len(ROUND_CONFIG):
-        return []
-
-    cfg = ROUND_CONFIG[rnd]
+    # Reuse last round config for rounds beyond defined ones
+    cfg = ROUND_CONFIG[min(rnd, len(ROUND_CONFIG) - 1)]
     msgs: list[str] = []
     round_max_hp = cfg["hp"]
 
@@ -246,7 +249,7 @@ def _init_round(state: GameState) -> list[str]:
     state.shell_index = 0
     state.live_count = live_count
     state.blank_count = blank_count
-    state.handcuffed_tg_id = 0
+    state.handcuffed_tg_ids = []
     state.turn_index = 0
 
     line = f"— 第{rnd + 1}轮: {live_count}实弹 {blank_count}空弹 | 上限{round_max_hp}HP"
@@ -279,8 +282,8 @@ def _advance_turn(state: GameState) -> None:
     state.turn_index = (state.turn_index + 1) % len(alive_tids)
     next_tid = alive_tids[state.turn_index]
 
-    if state.handcuffed_tg_id == next_tid:
-        state.handcuffed_tg_id = 0
+    if next_tid in state.handcuffed_tg_ids:
+        state.handcuffed_tg_ids.remove(next_tid)
         name = "魔鬼" if next_tid == DEVIL_TG_ID else (_get_player(state, next_tid) or {}).get("name", "?")
         state.action_log.append(f"{name} 被铐住，跳过回合")
         state.turn_index = (state.turn_index + 1) % len(alive_tids)
@@ -303,26 +306,9 @@ def _check_round_end(state: GameState) -> list[str]:
 
     if state.shell_index >= len(state.shells):
         state.current_round += 1
-        if state.current_round >= len(ROUND_CONFIG):
-            alive.sort(key=lambda p: p["hp"], reverse=True)
-            top_hp = alive[0]["hp"]
-            tied = [p for p in alive if p["hp"] == top_hp]
-            if len(tied) > 1:
-                state.phase = "finished"
-                state.winner_tg_id = 0
-                tied_names = "、".join(
-                    "魔鬼" if p.get("is_devil") else p["name"] for p in tied
-                )
-                msgs.append(f">>> 弹尽 {tied_names} {top_hp}HP平局")
-            else:
-                state.winner_tg_id = alive[0]["tg_id"]
-                state.phase = "finished"
-                winner_name = "魔鬼" if alive[0]["is_devil"] else alive[0]["name"]
-                msgs.append(f">>> 弹尽 {winner_name} {alive[0]['hp']}HP获胜")
-        else:
-            # Store round start messages for animation
-            round_msgs = _init_round(state)
-            state.pending_display = round_msgs
+        # Keep going — reuse last round config if past the defined rounds
+        round_msgs = _init_round(state)
+        state.pending_display = round_msgs
 
     return msgs
 
@@ -408,7 +394,8 @@ def _use_item(state: GameState, user_tg_id: int, item_key: str, target_tg_id: in
             player["hp"] += 1
             msgs.append(f"{name} 抽烟回血 +1HP ({player['hp']}/{max_hp})")
         else:
-            msgs.append(f"{name} 抽烟 → 满血，无效")
+            player["items"].append("cigarette")
+            msgs.append(f"{name} 满血了，香烟已退回")
 
     elif item_key == "saw":
         player["saw_active"] = True
@@ -435,12 +422,14 @@ def _use_item(state: GameState, user_tg_id: int, item_key: str, target_tg_id: in
                 target = max(alive_opponents, key=lambda p: p.get("hp", 0))
 
         if not target:
+            player["items"].append("adrenaline")
             msgs.append(f"{name} 注射肾上腺素 → 没有可偷目标")
             return msgs
 
         stealable = [i for i in target.get("items", []) if i != "adrenaline"]
         t_name = "魔鬼" if target.get("is_devil") else target.get("name", "?")
         if not stealable:
+            player["items"].append("adrenaline")
             msgs.append(f"{name} 注射肾上腺素 → {t_name} 没有可偷道具")
             return msgs
 
@@ -521,28 +510,27 @@ def _use_item(state: GameState, user_tg_id: int, item_key: str, target_tg_id: in
         alive_opponents = [p for p in _alive_players(state) if p["tg_id"] != user_tg_id]
 
         if target_tg_id:
-            if target_tg_id == state.handcuffed_tg_id:
+            if target_tg_id in state.handcuffed_tg_ids:
                 player["items"].append("handcuffs")
-                msgs.append("该玩家已被铐住，不能重复使用")
+                msgs.append("该玩家已被铐住，不能重复铐")
             else:
                 target = _get_player(state, target_tg_id)
                 if target and target["alive"] and target["tg_id"] != user_tg_id:
-                    state.handcuffed_tg_id = target_tg_id
+                    state.handcuffed_tg_ids.append(target_tg_id)
                     t_name = "魔鬼" if target["is_devil"] else target["name"]
                     msgs.append(f"{name} 用手铐铐住 {t_name}")
                 else:
                     player["items"].append("handcuffs")
                     msgs.append("手铐目标无效")
         elif alive_opponents:
-            # Exclude already-handcuffed player from auto-target
-            candidates = [p for p in alive_opponents if p["tg_id"] != state.handcuffed_tg_id]
+            candidates = [p for p in alive_opponents if p["tg_id"] not in state.handcuffed_tg_ids]
             if not candidates:
                 player["items"].append("handcuffs")
-                msgs.append(f"{name} 手铐无效（对手已被铐住）")
+                msgs.append(f"{name} 手铐无效（所有对手已被铐住）")
             else:
                 candidates.sort(key=lambda p: p["hp"], reverse=True)
                 target = candidates[0]
-                state.handcuffed_tg_id = target["tg_id"]
+                state.handcuffed_tg_ids.append(target["tg_id"])
                 t_name = "魔鬼" if target["is_devil"] else target["name"]
                 msgs.append(f"{name} 用手铐铐住 {t_name}")
         else:
@@ -596,7 +584,7 @@ def _devil_single_step(state: GameState) -> list[str]:
 
     if "handcuffs" in items and alive_opponents and not making_mistake:
         # Don't handcuff someone already handcuffed
-        handcuff_candidates = [p for p in alive_opponents if p["tg_id"] != state.handcuffed_tg_id]
+        handcuff_candidates = [p for p in alive_opponents if p["tg_id"] not in state.handcuffed_tg_ids]
         if handcuff_candidates:
             strongest = max(handcuff_candidates, key=lambda p: p["hp"])
             return _use_item(state, DEVIL_TG_ID, "handcuffs", target_tg_id=strongest["tg_id"])
@@ -803,6 +791,9 @@ async def join_room(
     await r.set(f"roulette_player:{tg_id}", room_id, ex=ROOM_TTL)
     await r.set(f"roulette_bet:{tg_id}", str(state.bet), ex=BET_KEY_TTL)
 
+    # Auto-start when room is full (3 players)
+    if len(state.players) >= 3:
+        return True, f"✅ {player_name} 加入！房间已满，游戏自动开始！", state
     return True, f"✅ {player_name} 加入了轮盘赌！（{len(state.players)}/3）", state
 
 
@@ -1196,7 +1187,7 @@ def render_game_panel(state: GameState, viewer_tg_id: int = 0) -> str:
             f"等待玩家加入，或房主开始游戏"
         )
 
-    rnd = min(state.current_round, len(ROUND_CONFIG) - 1) + 1
+    rnd = state.current_round + 1
     lines = [f"恶魔轮盘赌 · 第{rnd}轮"]
 
     if state.phase == "finished":
