@@ -481,13 +481,7 @@ def _use_item(state: GameState, user_tg_id: int, item_key: str, target_tg_id: in
             return msgs
 
         remaining = len(state.shells) - state.shell_index
-        position = target_tg_id if target_tg_id > 0 else 1
-        if position < 1 or position > remaining:
-            # Invalid position should not consume phone.
-            player["items"].append("phone")
-            msgs.append(f"{name} 用一次性手机 → 位置无效 (1-{remaining})")
-            return msgs
-
+        position = random.randint(1, remaining)
         probe_idx = state.shell_index + position - 1
         predicted_live = state.shells[probe_idx]
         result = "实弹" if predicted_live else "空弹"
@@ -1172,7 +1166,7 @@ async def check_ttl_refund(tg_id: int) -> int:
     except (TypeError, ValueError):
         return 0
 
-    refund = bet // 2
+    refund = bet  # full refund for TTL expiry (likely game bug/devil stuck)
     if refund > 0:
         from services.user_service import add_points_by_tg_id
 
@@ -1308,8 +1302,14 @@ def render_game_panel(state: GameState, viewer_tg_id: int = 0) -> str:
             hint = "实弹!" if viewer["known_shell"] == "live" else "空弹"
             lines.append(f"  [偷看结果: {hint}]")
 
-    # Action log — last 6 entries, each on clear separate line
-    recent = state.action_log[-6:]
+    # Action log — only entries from current round (after last round header "—")
+    current_round_log: list[str] = []
+    for entry in state.action_log:
+        if entry.startswith("—"):
+            current_round_log = [entry]  # reset on round header
+        else:
+            current_round_log.append(entry)
+    recent = current_round_log[-8:]
     if recent:
         lines.append("")
         lines.append("📋 行动记录:")

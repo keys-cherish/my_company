@@ -7,6 +7,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from commands import CMD_CHECKIN
+from cache.redis_client import get_redis
 from db.engine import async_session
 from keyboards.menus import tag_kb
 from services.checkin_service import do_checkin
@@ -14,6 +15,19 @@ from services.user_service import get_or_create_user, add_points
 from utils.panel_owner import mark_panel
 
 router = Router()
+
+
+async def _already_checked_in(tg_id: int) -> bool:
+    """Check Redis to see if user already checked in today."""
+    import datetime as dt
+    BJ_TZ = dt.timezone(dt.timedelta(hours=8))
+    r = await get_redis()
+    today_bj = dt.datetime.now(BJ_TZ).date().isoformat()
+    last_date = await r.get(f"checkin:last:{tg_id}")
+    if last_date:
+        last_date = last_date if isinstance(last_date, str) else last_date.decode()
+        return last_date == today_bj
+    return False
 
 
 def _checkin_kb(tg_id: int | None = None) -> InlineKeyboardMarkup:
@@ -28,6 +42,14 @@ def _checkin_kb(tg_id: int | None = None) -> InlineKeyboardMarkup:
 async def cmd_checkin(message: types.Message):
     """命令入口：/cp_checkin"""
     tg_id = message.from_user.id
+    if await _already_checked_in(tg_id):
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 返回", callback_data="menu:main")],
+        ])
+        kb = tag_kb(kb, tg_id)
+        sent = await message.reply("📋 你今天已经打过卡了，明天再来吧！", reply_markup=kb)
+        await mark_panel(sent.chat.id, sent.message_id, tg_id)
+        return
     await _do_checkin(message, tg_id, is_callback=False)
 
 
@@ -42,6 +64,15 @@ async def cb_checkin(callback: types.CallbackQuery):
 async def cb_checkin_menu(callback: types.CallbackQuery):
     """从主菜单进入打卡界面"""
     tg_id = callback.from_user.id
+    if await _already_checked_in(tg_id):
+        text = "📋 你今天已经打过卡了，明天再来吧！"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 返回", callback_data="menu:main")],
+        ])
+        kb = tag_kb(kb, tg_id)
+        await callback.message.edit_text(text, reply_markup=kb)
+        await callback.answer()
+        return
     text = (
         "🏢 每日打卡\n"
         f"{'─' * 24}\n"

@@ -184,33 +184,18 @@ def _game_kb(state, viewer_tg_id: int) -> InlineKeyboardMarkup:
                     callback_data=f"roulette:use:{state.room_id}:{item_key}",
                 )
             )
+        if phone_count > 0:
+            label = ITEM_NAME.get("phone", "一次性手机")
+            if phone_count > 1:
+                label = f"{label}x{phone_count}"
+            item_row.append(
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"roulette:use:{state.room_id}:phone",
+                )
+            )
         if item_row:
             rows.append(item_row)
-
-        if phone_count > 0:
-            remaining_shells = max(0, len(state.shells) - state.shell_index)
-            if remaining_shells > 0:
-                phone_buttons = [
-                    InlineKeyboardButton(
-                        text=f"手机看第{i}发",
-                        callback_data=f"roulette:use:{state.room_id}:phone:{i}",
-                    )
-                    for i in range(1, remaining_shells + 1)
-                ]
-                for i in range(0, len(phone_buttons), 3):
-                    rows.append(phone_buttons[i:i + 3])
-            else:
-                label = ITEM_NAME.get("phone", "一次性手机")
-                if phone_count > 1:
-                    label = f"{label}x{phone_count}"
-                rows.append(
-                    [
-                        InlineKeyboardButton(
-                            text=label,
-                            callback_data=f"roulette:use:{state.room_id}:phone",
-                        )
-                    ]
-                )
 
     rows.append([InlineKeyboardButton(text="放弃(-50%)", callback_data=f"roulette:cancel:{state.room_id}")])
     rows.append([InlineKeyboardButton(text="刷新", callback_data=f"roulette:refresh:{state.room_id}")])
@@ -281,7 +266,7 @@ async def cmd_cp_demon(message: types.Message):
     # Check for TTL-expired game and auto-refund 50%
     refund = await check_ttl_refund(tg_id)
     if refund > 0:
-        await message.answer(f"⏰ 上一局轮盘赌超时失效，已退还 {refund:,} 积分（50%赌注）")
+        await message.answer(f"⏰ 上一局轮盘赌超时失效，已全额退还 {refund:,} 积分")
 
     if bet <= 0:
         pts = await get_points_by_tg_id(tg_id)
@@ -630,11 +615,29 @@ async def cb_roulette_cancel(callback: types.CallbackQuery):
     tg_id = callback.from_user.id
 
     ok, msg = await cancel_game(room_id=room_id, tg_id=tg_id)
-    try:
-        await callback.message.edit_text(msg)
-    except Exception:
-        await callback.message.answer(msg)
-    await callback.answer()
+
+    # Check if game is still going (other players continue)
+    state = await get_game_state(room_id)
+    if state and state.phase == "playing":
+        # Game continues — update panel with current state for remaining players
+        text = render_game_panel(state, tg_id)
+        kb = _game_kb(state, tg_id)
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            pass
+        await callback.answer(msg, show_alert=True)
+
+        # If it's now the devil's turn, animate
+        current = _current_turn_tg_id(state)
+        if current == DEVIL_TG_ID:
+            await _animate_devil_turn(callback, room_id, tg_id)
+    else:
+        try:
+            await callback.message.edit_text(msg)
+        except Exception:
+            await callback.message.answer(msg)
+        await callback.answer()
 
 
 @router.callback_query(F.data.startswith("roulette:refresh:"))
@@ -649,7 +652,7 @@ async def cb_roulette_refresh(callback: types.CallbackQuery):
         if refund > 0:
             try:
                 await callback.message.edit_text(
-                    f"⏰ 轮盘赌超时失效，已退还 {refund:,} 积分（50%赌注）"
+                    f"⏰ 轮盘赌超时失效，已全额退还 {refund:,} 积分"
                 )
             except Exception:
                 pass

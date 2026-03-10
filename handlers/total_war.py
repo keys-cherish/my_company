@@ -320,6 +320,9 @@ async def cb_total_war_confirm(callback: types.CallbackQuery):
                             wins += 1
                             # Extract loot from message (rough parse)
                             battle_lines.append(f"  ✅ vs {target.name} — 胜")
+                            # Update quest progress
+                            from services.quest_service import update_quest_progress
+                            await update_quest_progress(session, user.id, "battle_win_count", increment=1)
                         else:
                             losses += 1
                             battle_lines.append(f"  ❌ vs {target.name} — 败")

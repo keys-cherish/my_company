@@ -219,6 +219,8 @@ async def cb_upgrade_product(callback: types.CallbackQuery):
 
     async with async_session() as session:
         async with session.begin():
+            from db.models import Product as ProductModel
+
             user = await get_user_by_tg_id(session, tg_id)
             if not user:
                 await callback.answer("请先 /cp_create 创建公司", show_alert=True)
@@ -227,7 +229,9 @@ async def cb_upgrade_product(callback: types.CallbackQuery):
                 if i > 0:
                     # Clear cooldown set by previous iteration to allow batch upgrades
                     r = await get_redis()
-                    await r.delete(f"product_upgrade_cd:{product_id}")
+                    p = await session.get(ProductModel, product_id)
+                    cd_key = f"product_upgrade_cd:{p.company_id}:{p.tech_id}"
+                    await r.delete(cd_key)
                 ok, msg = await upgrade_product(session, product_id, user.id)
                 if not ok:
                     if upgraded == 0:
@@ -241,7 +245,6 @@ async def cb_upgrade_product(callback: types.CallbackQuery):
                 upgraded += 1
                 last_msg = msg
             # Get final product state for the summary
-            from db.models import Product as ProductModel
             product = await session.get(ProductModel, product_id)
             await update_daily_revenue(session, product.company_id)
 

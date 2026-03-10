@@ -22,7 +22,7 @@ from cache.redis_client import get_redis
 WORK_HOUR_OPTIONS: dict[int, dict] = {
     6:  {"label": "😴 轻松", "income_mult": 0.80, "cost_mult": 0.92, "ethics_delta": 2},
     8:  {"label": "🏢 正常", "income_mult": 1.00, "cost_mult": 1.00, "ethics_delta": 0},
-    10: {"label": "🔥 冲刺", "income_mult": 1.50, "cost_mult": 1.10, "ethics_delta": -2},
+    10: {"label": "🔥 冲刺", "income_mult": 1.50, "cost_mult": 1.10, "ethics_delta": 0},
     12: {"label": "💀 高压", "income_mult": 3.00, "cost_mult": 1.25, "ethics_delta": -5},
     24: {"label": "☠️ 疯狂", "income_mult": 100.0, "cost_mult": 10.00, "ethics_delta": -15},
 }
