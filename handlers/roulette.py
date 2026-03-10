@@ -293,7 +293,7 @@ async def cmd_cp_demon(message: types.Message):
         room_id=room_id,
         creator_tg_id=tg_id,
         creator_company_id=company.id,
-        creator_name=company.name,
+        creator_name=message.from_user.full_name,
         bet=bet,
     )
     if not ok:
@@ -364,7 +364,7 @@ async def cb_roulette_create(callback: types.CallbackQuery):
         if company.owner_id != user_obj.id:
             await callback.answer("只有公司老板才能使用该公司参赌", show_alert=True)
             return
-        player_name = company.name
+        player_name = callback.from_user.full_name
 
     ok = await consume_self_points(tg_id, bet)
     if not ok:
@@ -426,7 +426,7 @@ async def cb_roulette_join(callback: types.CallbackQuery):
             return
         company = companies[0]
         company_id = company.id
-        player_name = company.name
+        player_name = callback.from_user.full_name
 
     ok = await consume_self_points(tg_id, bet)
     if not ok:
