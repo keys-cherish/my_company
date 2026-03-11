@@ -2,7 +2,8 @@
 
 Supports:
 - 2-3 player PvP
-- Solo vs devil AI
+- Co-op vs devil AI (多人单挑)
+- Hell mode vs multiple devils (地狱模式, 10x reward per round)
 
 Redis keys:
 - roulette_room:{room_id} -> JSON game state
@@ -31,7 +32,14 @@ BET_KEY_TTL = ROOM_TTL + 300  # extra 5 min for refund detection
 MIN_BET = settings.roulette_min_bet
 MAX_BET_PCT = settings.roulette_max_bet_pct
 
-DEVIL_TG_ID = -1  # Sentinel for devil AI
+DEVIL_TG_ID = -1  # Sentinel for devil AI (backward compat)
+DEVIL_TG_IDS = [-1, -2, -3]  # Multiple devil AI sentinels
+DEVIL_NAMES = {-1: "魔鬼A", -2: "魔鬼B", -3: "魔鬼C"}
+
+
+def _is_devil(tg_id: int) -> bool:
+    """Check if a tg_id represents a devil AI player."""
+    return tg_id < 0
 
 
 def _escape_text(value: object) -> str:
@@ -42,7 +50,7 @@ def _escape_text(value: object) -> str:
 def _format_player_name(player: dict, *, mention: bool = False) -> str:
     """Render player name with optional inline mention link."""
     if player.get("is_devil"):
-        return "魔鬼"
+        return _escape_text(player.get("name", "魔鬼"))
     safe_name = _escape_text(player.get("name", "?"))
     if mention:
         tg_id = int(player.get("tg_id", 0) or 0)
@@ -150,6 +158,8 @@ class GameState:
     live_count: int = 0
     blank_count: int = 0
     forfeited_pool: int = 0  # total points already refunded via forfeit
+    game_mode: str = "pvp"  # pvp / coop / hell
+    devil_count: int = 0
     pending_display: list[str] = field(default_factory=list)  # round start msgs to animate
 
     def to_json(self) -> str:
@@ -207,7 +217,7 @@ async def _cleanup_room(room_id: str, player_tg_ids: list[int]) -> None:
     r = await get_redis()
     await r.delete(f"roulette_room:{room_id}")
     for tid in player_tg_ids:
-        if tid != DEVIL_TG_ID:
+        if not _is_devil(tid):
             await r.delete(f"roulette_player:{tid}")
             await r.delete(f"roulette_bet:{tid}")
 
@@ -263,7 +273,7 @@ def _init_round(state: GameState) -> list[str]:
             items = random.choices(item_pool, k=cfg["items"])
             p["items"] = items
             item_text = ", ".join(ITEM_NAME.get(i, i) for i in items)
-            name = "魔鬼" if p["is_devil"] else p["name"]
+            name = p["name"]
             msgs.append(f"  {name}获得: {item_text}")
 
     return msgs
@@ -284,7 +294,7 @@ def _advance_turn(state: GameState) -> None:
 
     if next_tid in state.handcuffed_tg_ids:
         state.handcuffed_tg_ids.remove(next_tid)
-        name = "魔鬼" if next_tid == DEVIL_TG_ID else (_get_player(state, next_tid) or {}).get("name", "?")
+        name = (_get_player(state, next_tid) or {}).get("name", "?")
         state.action_log.append(f"{name} 被铐住，跳过回合")
         state.turn_index = (state.turn_index + 1) % len(alive_tids)
 
@@ -294,15 +304,33 @@ def _check_round_end(state: GameState) -> list[str]:
     alive = _alive_players(state)
     msgs: list[str] = []
 
-    if len(alive) <= 1:
-        state.phase = "finished"
-        if alive:
-            state.winner_tg_id = alive[0]["tg_id"]
-            winner_name = "魔鬼" if alive[0]["is_devil"] else alive[0]["name"]
-            msgs.append(f">>> {winner_name} 获胜!")
-        else:
-            msgs.append(">>> 全灭!")
-        return msgs
+    if state.game_mode in ("coop", "hell"):
+        # Team-based: game ends when all humans or all devils are eliminated
+        alive_humans = [p for p in alive if not p.get("is_devil")]
+        alive_devils = [p for p in alive if p.get("is_devil")]
+
+        if not alive_humans:
+            state.phase = "finished"
+            state.winner_tg_id = alive_devils[0]["tg_id"] if alive_devils else 0
+            msgs.append(">>> 魔鬼获胜! 所有玩家被淘汰!")
+            return msgs
+        if not alive_devils:
+            state.phase = "finished"
+            state.winner_tg_id = alive_humans[0]["tg_id"]
+            names = ", ".join(p["name"] for p in alive_humans)
+            msgs.append(f">>> 人类获胜! {names} 存活!")
+            return msgs
+    else:
+        # PvP: last player standing
+        if len(alive) <= 1:
+            state.phase = "finished"
+            if alive:
+                state.winner_tg_id = alive[0]["tg_id"]
+                winner_name = alive[0]["name"]
+                msgs.append(f">>> {winner_name} 获胜!")
+            else:
+                msgs.append(">>> 全灭!")
+            return msgs
 
     if state.shell_index >= len(state.shells):
         state.current_round += 1
@@ -332,8 +360,8 @@ def _do_shoot(state: GameState, shooter_tg_id: int, target_tg_id: int) -> list[s
     state.live_count = sum(1 for s in remaining if s)
     state.blank_count = sum(1 for s in remaining if not s)
 
-    shooter_name = "魔鬼" if shooter["is_devil"] else shooter["name"]
-    target_name = "魔鬼" if target["is_devil"] else target["name"]
+    shooter_name = shooter["name"]
+    target_name = target["name"]
     self_shot = shooter_tg_id == target_tg_id
     shooter["known_shell"] = None
 
@@ -376,7 +404,7 @@ def _use_item(state: GameState, user_tg_id: int, item_key: str, target_tg_id: in
         return ["你没有这个道具"]
 
     player["items"].remove(item_key)
-    name = "魔鬼" if player["is_devil"] else player["name"]
+    name = player["name"]
     msgs: list[str] = []
 
     if item_key == "magnifier":
@@ -427,7 +455,7 @@ def _use_item(state: GameState, user_tg_id: int, item_key: str, target_tg_id: in
             return msgs
 
         stealable = [i for i in target.get("items", []) if i != "adrenaline"]
-        t_name = "魔鬼" if target.get("is_devil") else target.get("name", "?")
+        t_name = target.get("name", "?")
         if not stealable:
             player["items"].append("adrenaline")
             msgs.append(f"{name} 注射肾上腺素 → {t_name} 没有可偷道具")
@@ -517,7 +545,7 @@ def _use_item(state: GameState, user_tg_id: int, item_key: str, target_tg_id: in
                 target = _get_player(state, target_tg_id)
                 if target and target["alive"] and target["tg_id"] != user_tg_id:
                     state.handcuffed_tg_ids.append(target_tg_id)
-                    t_name = "魔鬼" if target["is_devil"] else target["name"]
+                    t_name = target["name"]
                     msgs.append(f"{name} 用手铐铐住 {t_name}")
                 else:
                     player["items"].append("handcuffs")
@@ -531,7 +559,7 @@ def _use_item(state: GameState, user_tg_id: int, item_key: str, target_tg_id: in
                 candidates.sort(key=lambda p: p["hp"], reverse=True)
                 target = candidates[0]
                 state.handcuffed_tg_ids.append(target["tg_id"])
-                t_name = "魔鬼" if target["is_devil"] else target["name"]
+                t_name = target["name"]
                 msgs.append(f"{name} 用手铐铐住 {t_name}")
         else:
             player["items"].append("handcuffs")
@@ -540,18 +568,19 @@ def _use_item(state: GameState, user_tg_id: int, item_key: str, target_tg_id: in
     return msgs
 
 
-def _devil_single_step(state: GameState) -> list[str]:
+def _devil_single_step(state: GameState, devil_tg_id: int = DEVIL_TG_ID) -> list[str]:
     """Execute ONE devil AI action (use item or shoot). Returns messages for that action.
     Returns empty list if devil has no more actions to take this turn."""
-    devil = _get_player(state, DEVIL_TG_ID)
+    devil = _get_player(state, devil_tg_id)
     if not devil or not devil["alive"]:
         return []
     if state.phase != "playing":
         return []
-    if _current_turn_tg_id(state) != DEVIL_TG_ID:
+    if _current_turn_tg_id(state) != devil_tg_id:
         return []
 
-    alive_opponents = [p for p in _alive_players(state) if p["tg_id"] != DEVIL_TG_ID]
+    # Devils only target humans
+    alive_opponents = [p for p in _alive_players(state) if not p.get("is_devil")]
     if not alive_opponents:
         return []
 
@@ -561,16 +590,16 @@ def _devil_single_step(state: GameState) -> list[str]:
 
     # Priority: magnifier > phone > inverter > adrenaline > handcuffs > beer > cigarette > pill > saw > shoot
     if "magnifier" in items and not making_mistake and known is None:
-        return _use_item(state, DEVIL_TG_ID, "magnifier")
+        return _use_item(state, devil_tg_id, "magnifier")
 
     if "phone" in items and not making_mistake and known is None:
-        return _use_item(state, DEVIL_TG_ID, "phone", target_tg_id=1)
+        return _use_item(state, devil_tg_id, "phone", target_tg_id=1)
 
     # Re-check known after possible magnifier usage
     known = devil.get("known_shell")
 
     if "inverter" in items and known == "live" and devil["hp"] <= 1 and not making_mistake:
-        return _use_item(state, DEVIL_TG_ID, "inverter")
+        return _use_item(state, devil_tg_id, "inverter")
 
     known = devil.get("known_shell")
 
@@ -580,30 +609,30 @@ def _devil_single_step(state: GameState) -> list[str]:
         )
         if stealable_exists:
             strongest = max(alive_opponents, key=lambda p: p["hp"])
-            return _use_item(state, DEVIL_TG_ID, "adrenaline", target_tg_id=strongest["tg_id"])
+            return _use_item(state, devil_tg_id, "adrenaline", target_tg_id=strongest["tg_id"])
 
     if "handcuffs" in items and alive_opponents and not making_mistake:
         # Don't handcuff someone already handcuffed
         handcuff_candidates = [p for p in alive_opponents if p["tg_id"] not in state.handcuffed_tg_ids]
         if handcuff_candidates:
             strongest = max(handcuff_candidates, key=lambda p: p["hp"])
-            return _use_item(state, DEVIL_TG_ID, "handcuffs", target_tg_id=strongest["tg_id"])
+            return _use_item(state, devil_tg_id, "handcuffs", target_tg_id=strongest["tg_id"])
 
     if "beer" in items and known is None and not making_mistake:
-        return _use_item(state, DEVIL_TG_ID, "beer")
+        return _use_item(state, devil_tg_id, "beer")
 
     # Re-check known after possible beer eject
     known = devil.get("known_shell")
 
     if known == "live" and "saw" in items and not making_mistake:
-        return _use_item(state, DEVIL_TG_ID, "saw")
+        return _use_item(state, devil_tg_id, "saw")
 
     max_hp = devil.get("max_hp", ROUND_CONFIG[state.current_round]["hp"])
     if "cigarette" in items and devil["hp"] < max_hp and not making_mistake:
-        return _use_item(state, DEVIL_TG_ID, "cigarette")
+        return _use_item(state, devil_tg_id, "cigarette")
 
     if "pill" in items and devil["hp"] <= 1 and not making_mistake:
-        result = _use_item(state, DEVIL_TG_ID, "pill")
+        result = _use_item(state, devil_tg_id, "pill")
         if not devil["alive"]:
             return result
         return result
@@ -615,39 +644,39 @@ def _devil_single_step(state: GameState) -> list[str]:
     known = devil.get("known_shell")
     if known == "blank":
         # Known blank → always shoot self (free extra turn)
-        return _do_shoot(state, DEVIL_TG_ID, DEVIL_TG_ID)
+        return _do_shoot(state, devil_tg_id, devil_tg_id)
     elif known == "live":
         # Known live → never shoot self; mistake just picks random opponent
         if making_mistake:
             target = random.choice(alive_opponents)
         else:
             target = min(alive_opponents, key=lambda p: p["hp"])
-        return _do_shoot(state, DEVIL_TG_ID, target["tg_id"])
+        return _do_shoot(state, devil_tg_id, target["tg_id"])
     else:
         # Unknown shell
         if making_mistake:
             target = random.choice(alive_opponents + [devil])
-            return _do_shoot(state, DEVIL_TG_ID, target["tg_id"])
+            return _do_shoot(state, devil_tg_id, target["tg_id"])
         remaining = state.shells[state.shell_index:]
         live_ratio = sum(1 for s in remaining if s) / max(1, len(remaining))
         if live_ratio <= 0.35:
-            return _do_shoot(state, DEVIL_TG_ID, DEVIL_TG_ID)
+            return _do_shoot(state, devil_tg_id, devil_tg_id)
         else:
             weakest = min(alive_opponents, key=lambda p: p["hp"])
-            return _do_shoot(state, DEVIL_TG_ID, weakest["tg_id"])
+            return _do_shoot(state, devil_tg_id, weakest["tg_id"])
 
 
-def _devil_turn(state: GameState) -> list[str]:
+def _devil_turn(state: GameState, devil_tg_id: int = DEVIL_TG_ID) -> list[str]:
     """Execute entire devil AI turn at once (for backward compat). Returns all messages."""
     all_msgs: list[str] = []
     for _ in range(20):  # safety limit
-        step_msgs = _devil_single_step(state)
+        step_msgs = _devil_single_step(state, devil_tg_id)
         if not step_msgs:
             break
         all_msgs.extend(step_msgs)
         if state.phase != "playing":
             break
-        if _current_turn_tg_id(state) != DEVIL_TG_ID:
+        if _current_turn_tg_id(state) != devil_tg_id:
             break
     return all_msgs
 
@@ -680,28 +709,30 @@ async def devil_execute_step(
     """Execute ONE devil action step. Returns (has_more_actions, messages, state).
 
     The handler should call this repeatedly with delays to animate devil turns.
+    Handles any devil's turn (supports multiple devils in hell mode).
     """
     state = await _load_state(room_id)
     if not state:
         return False, [], None
     if state.phase != "playing":
         return False, [], state
-    if _current_turn_tg_id(state) != DEVIL_TG_ID:
+
+    current = _current_turn_tg_id(state)
+    if not _is_devil(current):
         return False, [], state
 
-    step_msgs = _devil_single_step(state)
+    step_msgs = _devil_single_step(state, current)
     if not step_msgs:
         return False, [], state
 
     state.action_log.extend(step_msgs)
     await _save_state(state)
 
-    # Check if devil still has more actions
+    # Check if a devil still has more actions (same devil continues, or next devil)
+    next_current = _current_turn_tg_id(state)
     has_more = (
         state.phase == "playing"
-        and _current_turn_tg_id(state) == DEVIL_TG_ID
-        and _get_player(state, DEVIL_TG_ID) is not None
-        and (_get_player(state, DEVIL_TG_ID) or {}).get("alive", False)
+        and _is_devil(next_current)
     )
 
     return has_more, step_msgs, state
@@ -749,7 +780,7 @@ async def create_room(
         "😈 轮盘赌房间已创建！\n"
         f"赌注：{bet:,} 积分/人\n"
         "等待其他玩家加入（2-3人）\n"
-        "或点击「单挑魔鬼」开始 1v1"
+        "或点击「恶魔模式」挑战魔鬼"
     ), state
 
 
@@ -802,9 +833,12 @@ async def start_game(
     *,
     room_id: str,
     tg_id: int,
-    solo_vs_devil: bool = False,
+    mode: str = "pvp",
 ) -> tuple[bool, str, GameState | None]:
-    """Start game. Only creator can start."""
+    """Start game. Only creator can start.
+
+    mode: "pvp" (player vs player), "coop" (humans vs 1 devil), "hell" (humans vs 2-3 devils)
+    """
     state = await _load_state(room_id)
     if not state:
         return False, "❌ 房间不存在或已过期", None
@@ -813,21 +847,28 @@ async def start_game(
     if tg_id != state.creator_tg_id:
         return False, "❌ 只有房主可以开始游戏", None
 
-    if solo_vs_devil:
-        if len(state.players) != 1:
-            return False, "❌ 单挑模式只能在房主独自一人时开启", None
+    if mode == "coop":
+        # Co-op: all humans vs 1 devil
+        state.game_mode = "coop"
+        state.devil_count = 1
         state.players.append(
-            asdict(
-                PlayerState(
-                    tg_id=DEVIL_TG_ID,
-                    company_id=0,
-                    name="魔鬼",
-                    is_devil=True,
-                )
-            )
+            asdict(PlayerState(tg_id=DEVIL_TG_IDS[0], company_id=0, name="魔鬼", is_devil=True))
         )
+    elif mode == "hell":
+        # Hell mode: humans vs multiple devils
+        num_humans = len(state.players)
+        devil_count = 2 if num_humans <= 1 else 3
+        state.game_mode = "hell"
+        state.devil_count = devil_count
+        for i in range(devil_count):
+            devil_name = DEVIL_NAMES[DEVIL_TG_IDS[i]]
+            state.players.append(
+                asdict(PlayerState(tg_id=DEVIL_TG_IDS[i], company_id=0, name=devil_name, is_devil=True))
+            )
     elif len(state.players) < 2:
-        return False, "❌ 至少需要2名玩家，或使用单挑模式", None
+        return False, "❌ 至少需要2名玩家，或使用恶魔模式", None
+    else:
+        state.game_mode = "pvp"
 
     state.phase = "playing"
     state.current_round = 0
@@ -840,7 +881,7 @@ async def start_game(
 
     first_tid = _current_turn_tg_id(state)
     first_player = _get_player(state, first_tid)
-    first_name = "魔鬼" if (first_player and first_player["is_devil"]) else (first_player or {}).get("name", "?")
+    first_name = (first_player or {}).get("name", "?")
 
     result = "\n".join(init_msgs) + f"\n\n{first_name} 先手"
 
@@ -985,61 +1026,100 @@ async def cancel_game(
 
 async def _settle_game(state: GameState) -> str:
     """Distribute winnings and cleanup room."""
+    from services.user_service import add_points_by_tg_id, add_reputation, get_user_by_tg_id, get_self_points
+
     human_players = [p for p in state.players if not p.get("is_devil")]
     base_pot = state.bet * len(human_players)
-    round_reached = min(state.current_round, len(ROUND_CONFIG) - 1)
-    # Base 1.2x reward (first-round win = 20% profit), +50% per extra round
-    multiplier = 1.2 * (1.5 ** round_reached)
-    total_pot = int(base_pot * multiplier) - state.forfeited_pool
-    total_pot = max(total_pot, 0)
-    winner = _get_player(state, state.winner_tg_id)
+    round_reached = state.current_round  # 0-indexed
 
+    if state.game_mode == "hell":
+        # Hell mode: 10x per round (exponential)
+        multiplier = 10 ** (round_reached + 1)
+        total_pot = int(base_pot * multiplier) - state.forfeited_pool
+    else:
+        # PvP / Coop: base 1.2x, +50% per extra round
+        multiplier = 1.2 * (1.5 ** min(round_reached, len(ROUND_CONFIG) - 1))
+        total_pot = int(base_pot * multiplier) - state.forfeited_pool
+    total_pot = max(total_pot, 0)
+
+    winner = _get_player(state, state.winner_tg_id)
     msgs: list[str] = []
     is_draw = False
+    human_winners: list[dict] = []  # humans who get winnings
 
-    if state.winner_tg_id == 0 and len(_alive_players(state)) > 1:
-        from services.user_service import add_points_by_tg_id
+    if state.game_mode in ("coop", "hell"):
+        # Team-based settlement
+        alive_humans = [p for p in human_players if p.get("alive")]
+        if winner and winner.get("is_devil"):
+            msgs.append("魔鬼获胜! 积分被吞噬")
+        elif alive_humans:
+            human_winners = alive_humans
+            per_player = total_pot // len(alive_humans)
+            remainder = total_pot - per_player * len(alive_humans)
+            reputation_gain = 5 + (10 if state.game_mode == "hell" else 3) * len(human_players)
 
-        alive_humans = [p for p in _alive_players(state) if not p.get("is_devil")]
-        per_player = state.bet
-        for p in alive_humans:
-            try:
-                await add_points_by_tg_id(p["tg_id"], per_player, reason="roulette_draw_refund")
-            except Exception:
-                logger.exception("Failed to refund draw for tg_id=%s", p["tg_id"])
-        msgs.append(f"平局! 各退回 {per_player:,} 积分")
-        is_draw = True
-    elif winner and not winner.get("is_devil"):
-        from services.user_service import add_points_by_tg_id, add_reputation, get_user_by_tg_id, get_self_points
-
-        winnings = total_pot
-        reputation_gain = 5 + len(human_players) * 3
-
-        try:
-            await add_points_by_tg_id(winner["tg_id"], winnings, reason="roulette_winnings")
-        except Exception:
-            logger.exception("Failed to settle roulette winnings (self_points)")
-
-        try:
-            from db.engine import async_session
-
-            async with async_session() as session:
-                async with session.begin():
-                    user = await get_user_by_tg_id(session, winner["tg_id"])
-                    if user:
-                        await add_reputation(session, user.id, reputation_gain)
-        except Exception:
-            logger.exception("Failed to add roulette reputation")
-
-        new_balance = await get_self_points(winner["tg_id"])
-        msgs.append(
-            f"结算: {winner['name']} +{winnings:,}积分 +{reputation_gain}声望"
-            f" (余额: {new_balance:,})"
-        )
-    elif winner and winner.get("is_devil"):
-        msgs.append("魔鬼获胜! 积分被吞噬")
+            for i, p in enumerate(alive_humans):
+                share = per_player + (remainder if i == 0 else 0)
+                try:
+                    await add_points_by_tg_id(p["tg_id"], share, reason="roulette_winnings")
+                except Exception:
+                    logger.exception("Failed to settle roulette winnings")
+                try:
+                    from db.engine import async_session
+                    async with async_session() as session:
+                        async with session.begin():
+                            user = await get_user_by_tg_id(session, p["tg_id"])
+                            if user:
+                                await add_reputation(session, user.id, reputation_gain)
+                except Exception:
+                    logger.exception("Failed to add roulette reputation")
+                new_balance = await get_self_points(p["tg_id"])
+                msgs.append(
+                    f"结算: {p['name']} +{share:,}积分 +{reputation_gain}声望"
+                    f" (余额: {new_balance:,})"
+                )
+            if state.game_mode == "hell":
+                msgs.append(f"🔥 地狱模式 x{multiplier:,} 奖励倍率!")
+        else:
+            msgs.append("全灭，积分消失")
     else:
-        msgs.append("全灭，积分消失")
+        # PvP settlement
+        if state.winner_tg_id == 0 and len(_alive_players(state)) > 1:
+            alive_humans = [p for p in _alive_players(state) if not p.get("is_devil")]
+            per_player = state.bet
+            for p in alive_humans:
+                try:
+                    await add_points_by_tg_id(p["tg_id"], per_player, reason="roulette_draw_refund")
+                except Exception:
+                    logger.exception("Failed to refund draw for tg_id=%s", p["tg_id"])
+            msgs.append(f"平局! 各退回 {per_player:,} 积分")
+            is_draw = True
+        elif winner and not winner.get("is_devil"):
+            human_winners = [winner]
+            winnings = total_pot
+            reputation_gain = 5 + len(human_players) * 3
+            try:
+                await add_points_by_tg_id(winner["tg_id"], winnings, reason="roulette_winnings")
+            except Exception:
+                logger.exception("Failed to settle roulette winnings (self_points)")
+            try:
+                from db.engine import async_session
+                async with async_session() as session:
+                    async with session.begin():
+                        user = await get_user_by_tg_id(session, winner["tg_id"])
+                        if user:
+                            await add_reputation(session, user.id, reputation_gain)
+            except Exception:
+                logger.exception("Failed to add roulette reputation")
+            new_balance = await get_self_points(winner["tg_id"])
+            msgs.append(
+                f"结算: {winner['name']} +{winnings:,}积分 +{reputation_gain}声望"
+                f" (余额: {new_balance:,})"
+            )
+        elif winner and winner.get("is_devil"):
+            msgs.append("魔鬼获胜! 积分被吞噬")
+        else:
+            msgs.append("全灭，积分消失")
 
     # Update win/loss/draw stats for all human players
     r = await get_redis()
@@ -1057,7 +1137,7 @@ async def _settle_game(state: GameState) -> str:
 
         if is_draw:
             stats["draws"] = stats.get("draws", 0) + 1
-        elif winner and winner["tg_id"] == tid:
+        elif any(w["tg_id"] == tid for w in human_winners):
             stats["wins"] = stats.get("wins", 0) + 1
         else:
             stats["losses"] = stats.get("losses", 0) + 1
@@ -1176,6 +1256,7 @@ async def get_game_state(room_id: str) -> GameState | None:
 
 def render_game_panel(state: GameState, viewer_tg_id: int = 0) -> str:
     """Render game panel text — clean, readable, minimal emoji."""
+    mode_label = {"pvp": "", "coop": " [协力]", "hell": " [地狱]"}.get(state.game_mode, "")
     if state.phase == "waiting":
         names = ", ".join(_escape_text(p.get("name", "?")) for p in state.players)
         return (
@@ -1188,11 +1269,11 @@ def render_game_panel(state: GameState, viewer_tg_id: int = 0) -> str:
         )
 
     rnd = state.current_round + 1
-    lines = [f"恶魔轮盘赌 · 第{rnd}轮"]
+    lines = [f"恶魔轮盘赌{mode_label} · 第{rnd}轮"]
 
     if state.phase == "finished":
         # --- Finished: show full action log with round spacing ---
-        lines = ["恶魔轮盘赌 · 游戏结束"]
+        lines = [f"恶魔轮盘赌{mode_label} · 游戏结束"]
         lines.append("─" * 22)
 
         # Final HP display

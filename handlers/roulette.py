@@ -1,4 +1,4 @@
-"""Roulette handlers: PvP and solo-vs-devil game flow."""
+"""Roulette handlers: PvP, Co-op, and Hell mode game flow."""
 
 from __future__ import annotations
 
@@ -13,12 +13,12 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from commands import CMD_DEMON
 from keyboards.menus import tag_kb
 from services.roulette_service import (
-    DEVIL_TG_ID,
     ITEM_NAME,
     MIN_BET,
     _alive_players,
     _current_turn_tg_id,
     _get_player,
+    _is_devil,
     _settle_game,
     cancel_game,
     check_ttl_refund,
@@ -110,8 +110,8 @@ def _waiting_kb(room_id: str, creator_tg_id: int) -> InlineKeyboardMarkup:
                 callback_data=_owner_cb(f"roulette:begin:{room_id}", creator_tg_id),
             ),
             InlineKeyboardButton(
-                text="单挑魔鬼",
-                callback_data=_owner_cb(f"roulette:solo:{room_id}", creator_tg_id),
+                text="恶魔模式",
+                callback_data=_owner_cb(f"roulette:demon:{room_id}", creator_tg_id),
             ),
         ],
         [
@@ -135,7 +135,7 @@ def _game_kb(state, viewer_tg_id: int) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text="刷新", callback_data=f"roulette:refresh:{state.room_id}")])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
-    if current == DEVIL_TG_ID:
+    if _is_devil(current):
         rows.append([InlineKeyboardButton(text="刷新 (魔鬼回合)", callback_data=f"roulette:refresh:{state.room_id}")])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -155,7 +155,7 @@ def _game_kb(state, viewer_tg_id: int) -> InlineKeyboardMarkup:
                 )
             )
         else:
-            name = "魔鬼" if p["is_devil"] else p["name"][:4]
+            name = p["name"][:4]
             shoot_row.append(
                 InlineKeyboardButton(
                     text=f"射{name}",
@@ -203,7 +203,8 @@ def _game_kb(state, viewer_tg_id: int) -> InlineKeyboardMarkup:
 
 
 async def _animate_devil_turn(callback: types.CallbackQuery, room_id: str, tg_id: int):
-    """Animate devil actions one by one with delays between edits."""
+    """Animate devil actions one by one with delays between edits.
+    Handles consecutive devil turns (multiple devils in hell mode)."""
     for _ in range(20):  # safety limit
         await asyncio.sleep(DEVIL_STEP_DELAY)
 
@@ -447,7 +448,7 @@ async def cb_roulette_join(callback: types.CallbackQuery):
 
     # Auto-start when room is full (3 players)
     if len(state.players) >= 3:
-        ok2, msg2, state2 = await start_game(room_id=room_id, tg_id=state.creator_tg_id, solo_vs_devil=False)
+        ok2, msg2, state2 = await start_game(room_id=room_id, tg_id=state.creator_tg_id, mode="pvp")
         if ok2 and state2:
             state = state2
 
@@ -461,7 +462,7 @@ async def cb_roulette_join(callback: types.CallbackQuery):
             await mark_panel(sent.chat.id, sent.message_id, tg_id)
         await callback.answer("房间已满，游戏开始!")
 
-        if _current_turn_tg_id(state) == DEVIL_TG_ID:
+        if _is_devil(_current_turn_tg_id(state)):
             await _animate_devil_turn(callback, room_id, tg_id)
     else:
         text = render_game_panel(state, tg_id)
@@ -479,7 +480,7 @@ async def cb_roulette_begin(callback: types.CallbackQuery):
     room_id = callback.data.split(":")[2]
     tg_id = callback.from_user.id
 
-    ok, msg, state = await start_game(room_id=room_id, tg_id=tg_id, solo_vs_devil=False)
+    ok, msg, state = await start_game(room_id=room_id, tg_id=tg_id, mode="pvp")
     if not ok:
         await callback.answer(msg, show_alert=True)
         return
@@ -494,16 +495,59 @@ async def cb_roulette_begin(callback: types.CallbackQuery):
     await callback.answer("游戏开始!")
 
     # If devil goes first, animate step by step
-    if state and state.phase == "playing" and _current_turn_tg_id(state) == DEVIL_TG_ID:
+    if state and state.phase == "playing" and _is_devil(_current_turn_tg_id(state)):
         await _animate_devil_turn(callback, room_id, tg_id)
 
 
-@router.callback_query(F.data.startswith("roulette:solo:"))
-async def cb_roulette_solo(callback: types.CallbackQuery):
+@router.callback_query(F.data.startswith("roulette:demon:"))
+async def cb_roulette_demon_menu(callback: types.CallbackQuery):
+    """Show demon mode sub-menu: coop vs hell."""
     room_id = callback.data.split(":")[2]
     tg_id = callback.from_user.id
 
-    ok, msg, state = await start_game(room_id=room_id, tg_id=tg_id, solo_vs_devil=True)
+    state = await get_game_state(room_id)
+    if not state or state.phase != "waiting":
+        await callback.answer("房间不存在或已开始", show_alert=True)
+        return
+
+    text = (
+        f"😈 恶魔模式\n"
+        f"{'━' * 20}\n"
+        f"👥 多人单挑: 所有玩家协力对抗1个魔鬼\n"
+        f"  胜利后奖池均分\n\n"
+        f"🔥 地狱模式: 对抗2-3个魔鬼\n"
+        f"  每轮奖励x10倍! (1轮=10x, 2轮=100x, 3轮=1000x)\n"
+        f"{'━' * 20}\n"
+        f"赌注: {state.bet:,} 积分/人"
+    )
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="👥 多人单挑",
+                callback_data=_owner_cb(f"roulette:coop:{room_id}", tg_id),
+            ),
+            InlineKeyboardButton(
+                text="🔥 地狱模式",
+                callback_data=_owner_cb(f"roulette:hell:{room_id}", tg_id),
+            ),
+        ],
+        [InlineKeyboardButton(text="🔙 返回房间", callback_data=f"roulette:refresh:{room_id}")],
+    ]
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("roulette:coop:"))
+async def cb_roulette_coop(callback: types.CallbackQuery):
+    """Start co-op mode: all humans vs 1 devil."""
+    room_id = callback.data.split(":")[2]
+    tg_id = callback.from_user.id
+
+    ok, msg, state = await start_game(room_id=room_id, tg_id=tg_id, mode="coop")
     if not ok:
         await callback.answer(msg, show_alert=True)
         return
@@ -515,10 +559,33 @@ async def cb_roulette_solo(callback: types.CallbackQuery):
     except Exception:
         sent = await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
         await mark_panel(sent.chat.id, sent.message_id, tg_id)
-    await callback.answer("单挑模式开始!")
+    await callback.answer("协力模式开始!")
 
-    # If devil goes first, animate step by step
-    if state and state.phase == "playing" and _current_turn_tg_id(state) == DEVIL_TG_ID:
+    if state and state.phase == "playing" and _is_devil(_current_turn_tg_id(state)):
+        await _animate_devil_turn(callback, room_id, tg_id)
+
+
+@router.callback_query(F.data.startswith("roulette:hell:"))
+async def cb_roulette_hell(callback: types.CallbackQuery):
+    """Start hell mode: humans vs multiple devils, 10x reward per round."""
+    room_id = callback.data.split(":")[2]
+    tg_id = callback.from_user.id
+
+    ok, msg, state = await start_game(room_id=room_id, tg_id=tg_id, mode="hell")
+    if not ok:
+        await callback.answer(msg, show_alert=True)
+        return
+
+    text = render_game_panel(state, tg_id)
+    kb = _game_kb(state, tg_id)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        sent = await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+        await mark_panel(sent.chat.id, sent.message_id, tg_id)
+    await callback.answer("地狱模式开始! 奖励10倍递增!")
+
+    if state and state.phase == "playing" and _is_devil(_current_turn_tg_id(state)):
         await _animate_devil_turn(callback, room_id, tg_id)
 
 
@@ -552,7 +619,7 @@ async def cb_roulette_shoot(callback: types.CallbackQuery):
 
     # If it's now the devil's turn, animate step by step
     state = await get_game_state(room_id)
-    if state and state.phase == "playing" and _current_turn_tg_id(state) == DEVIL_TG_ID:
+    if state and state.phase == "playing" and _is_devil(_current_turn_tg_id(state)):
         await _animate_devil_turn(callback, room_id, tg_id)
 
 
@@ -604,7 +671,7 @@ async def cb_roulette_use_item(callback: types.CallbackQuery):
 
     # If it's now the devil's turn, animate step by step
     state = await get_game_state(room_id)
-    if state and state.phase == "playing" and _current_turn_tg_id(state) == DEVIL_TG_ID:
+    if state and state.phase == "playing" and _is_devil(_current_turn_tg_id(state)):
         await _animate_devil_turn(callback, room_id, tg_id)
 
 
@@ -649,7 +716,7 @@ async def cb_roulette_cancel(callback: types.CallbackQuery):
 
         # If it's now the devil's turn, animate
         current = _current_turn_tg_id(state)
-        if current == DEVIL_TG_ID:
+        if _is_devil(current):
             await _animate_devil_turn(callback, room_id, tg_id)
     else:
         try:
