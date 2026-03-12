@@ -424,6 +424,27 @@ def _check_round_end(state: GameState) -> list[str]:
     return msgs
 
 
+def _recover_stalled_devil_turn(state: GameState) -> list[str]:
+    """Best-effort recovery for impossible devil turns that would otherwise stall the room."""
+    if state.phase != "playing":
+        return []
+
+    current = _current_turn_tg_id(state)
+    if not _is_devil(current):
+        return []
+
+    if not _alive_human_players(state):
+        return _check_round_end(state)
+
+    if state.shell_index >= len(state.shells):
+        return _check_round_end(state)
+
+    devil = _get_player(state, current)
+    devil_name = (devil or {}).get("name", "魔鬼")
+    _advance_turn(state)
+    return [f"{devil_name} 陷入迟疑，回合被强制推进"]
+
+
 def _do_shoot(state: GameState, shooter_tg_id: int, target_tg_id: int) -> list[str]:
     """Execute one shot and return messages."""
     shooter = _get_player(state, shooter_tg_id)
@@ -834,7 +855,10 @@ async def devil_execute_step(
 
     step_msgs = _devil_single_step(state, current)
     if not step_msgs:
-        return False, [], state
+        step_msgs = _recover_stalled_devil_turn(state)
+        if not step_msgs:
+            await _save_state(state)
+            return False, [], state
 
     state.action_log.extend(step_msgs)
     await _save_state(state)
@@ -843,7 +867,7 @@ async def devil_execute_step(
     next_current = _current_turn_tg_id(state)
     has_more = (
         state.phase == "playing"
-        and _is_devil(next_current)
+        and (_is_devil(next_current) or bool(state.pending_display))
     )
 
     return has_more, step_msgs, state

@@ -238,8 +238,15 @@ async def _animate_devil_turn(callback: types.CallbackQuery, room_id: str, tg_id
         await asyncio.sleep(DEVIL_STEP_DELAY)
 
         has_more, step_msgs, state = await devil_execute_step(room_id=room_id)
-        if not state or not step_msgs:
-            break
+        if not state:
+            return
+        if not step_msgs:
+            if state.pending_display:
+                await _animate_pending(callback, room_id, tg_id)
+                continue
+            if state.phase == "playing" and _is_devil(_current_turn_tg_id(state)):
+                continue
+            return
 
         # Update panel after each devil action
         text = render_game_panel(state, tg_id)
