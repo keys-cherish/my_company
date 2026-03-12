@@ -43,6 +43,8 @@ logger = logging.getLogger(__name__)
 
 DEVIL_STEP_DELAY = 1.5  # seconds between devil actions
 ROUND_MSG_DELAY = 0.8   # seconds between round transition lines
+DEVIL_ANIMATION_MAX_STEPS = 80
+TARGETABLE_ITEM_KEYS = {"handcuffs", "adrenaline"}
 
 
 def _parse_demon_bet_arg(text: str | None) -> tuple[bool, int]:
@@ -202,10 +204,37 @@ def _game_kb(state, viewer_tg_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _target_item_kb(state, item_key: str) -> InlineKeyboardMarkup:
+    current = _current_turn_tg_id(state)
+    target_buttons: list[InlineKeyboardButton] = []
+    for player in _alive_players(state):
+        if player["tg_id"] == current:
+            continue
+        target_buttons.append(
+            InlineKeyboardButton(
+                text=player["name"][:6],
+                callback_data=f"roulette:use:{state.room_id}:{item_key}:{player['tg_id']}",
+            )
+        )
+
+    rows = [target_buttons[idx:idx + 3] for idx in range(0, len(target_buttons), 3)]
+    rows.append([InlineKeyboardButton(text="返回", callback_data=f"roulette:refresh:{state.room_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def _animate_devil_turn(callback: types.CallbackQuery, room_id: str, tg_id: int):
     """Animate devil actions one by one with delays between edits.
     Handles consecutive devil turns (multiple devils in hell mode)."""
-    for _ in range(20):  # safety limit
+    for _ in range(DEVIL_ANIMATION_MAX_STEPS):
+        state = await get_game_state(room_id)
+        if not state:
+            return
+        if state.pending_display:
+            await _animate_pending(callback, room_id, tg_id)
+            continue
+        if state.phase != "playing" or not _is_devil(_current_turn_tg_id(state)):
+            return
+
         await asyncio.sleep(DEVIL_STEP_DELAY)
 
         has_more, step_msgs, state = await devil_execute_step(room_id=room_id)
@@ -222,13 +251,13 @@ async def _animate_devil_turn(callback: types.CallbackQuery, room_id: str, tg_id
         except Exception:
             pass
 
-        if not has_more or state.phase != "playing":
-            break
+        if state.phase != "playing":
+            return
 
-    # After devil is done, animate any pending round transitions
-    state = await get_game_state(room_id)
-    if state and state.pending_display:
-        await _animate_pending(callback, room_id, tg_id)
+        if not has_more and not state.pending_display:
+            next_state = await get_game_state(room_id)
+            if not next_state or next_state.phase != "playing" or not _is_devil(_current_turn_tg_id(next_state)):
+                return
 
 
 @router.message(Command(CMD_DEMON))
@@ -516,7 +545,7 @@ async def cb_roulette_demon_menu(callback: types.CallbackQuery):
         f"👥 多人单挑: 所有玩家协力对抗1个魔鬼\n"
         f"  胜利后奖池均分\n\n"
         f"🔥 地狱模式: 对抗2-3个魔鬼\n"
-        f"  每轮奖励x10倍! (1轮=10x, 2轮=100x, 3轮=1000x)\n"
+        f"  基础奖励10x，后续每轮再×1.5 (1轮=10x, 2轮=15x, 3轮=22.5x)\n"
         f"{'━' * 20}\n"
         f"赌注: {state.bet:,} 积分/人"
     )
@@ -567,7 +596,7 @@ async def cb_roulette_coop(callback: types.CallbackQuery):
 
 @router.callback_query(F.data.startswith("roulette:hell:"))
 async def cb_roulette_hell(callback: types.CallbackQuery):
-    """Start hell mode: humans vs multiple devils, 10x reward per round."""
+    """Start hell mode: humans vs multiple devils, 10x base reward then ×1.5 each round."""
     room_id = callback.data.split(":")[2]
     tg_id = callback.from_user.id
 
@@ -583,7 +612,7 @@ async def cb_roulette_hell(callback: types.CallbackQuery):
     except Exception:
         sent = await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
         await mark_panel(sent.chat.id, sent.message_id, tg_id)
-    await callback.answer("地狱模式开始! 奖励10倍递增!")
+    await callback.answer("地狱模式开始! 基础10倍，后续每轮×1.5!")
 
     if state and state.phase == "playing" and _is_devil(_current_turn_tg_id(state)):
         await _animate_devil_turn(callback, room_id, tg_id)
@@ -635,6 +664,34 @@ async def cb_roulette_use_item(callback: types.CallbackQuery):
         except (TypeError, ValueError):
             item_arg = 0
     tg_id = callback.from_user.id
+
+    if item_key in TARGETABLE_ITEM_KEYS and item_arg == 0:
+        state = await get_game_state(room_id)
+        if not state:
+            await callback.answer("游戏不存在", show_alert=True)
+            return
+        if state.phase != "playing":
+            await callback.answer("游戏未在进行中", show_alert=True)
+            return
+        if _current_turn_tg_id(state) != tg_id:
+            await callback.answer("还没轮到你", show_alert=True)
+            return
+
+        targets = [player for player in _alive_players(state) if player["tg_id"] != tg_id]
+        if not targets:
+            await callback.answer("没有可指定的目标", show_alert=True)
+            return
+
+        item_name = html_escape(ITEM_NAME.get(item_key, item_key), quote=False)
+        text = render_game_panel(state, tg_id) + f"\n\n请选择「{item_name}」的目标："
+        kb = _target_item_kb(state, item_key)
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            sent = await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+            await mark_panel(sent.chat.id, sent.message_id, tg_id)
+        await callback.answer()
+        return
 
     ok, msg, state = await player_use_item(
         room_id=room_id,
@@ -755,3 +812,7 @@ async def cb_roulette_refresh(callback: types.CallbackQuery):
     except Exception:
         pass
     await callback.answer()
+
+    state = await get_game_state(room_id)
+    if state and state.phase == "playing" and _is_devil(_current_turn_tg_id(state)):
+        await _animate_devil_turn(callback, room_id, tg_id)

@@ -3,7 +3,7 @@
 Supports:
 - 2-3 player PvP
 - Co-op vs devil AI (多人单挑)
-- Hell mode vs multiple devils (地狱模式, 10x reward per round)
+- Hell mode vs multiple devils (地狱模式, base 10x then +1.5x each round)
 
 Redis keys:
 - roulette_room:{room_id} -> JSON game state
@@ -31,6 +31,8 @@ ROOM_TTL = settings.roulette_room_ttl_seconds
 BET_KEY_TTL = ROOM_TTL + 300  # extra 5 min for refund detection
 MIN_BET = settings.roulette_min_bet
 MAX_BET_PCT = settings.roulette_max_bet_pct
+HELL_BASE_MULTIPLIER = 10.0
+HELL_ROUND_GROWTH = 1.5
 
 DEVIL_TG_ID = -1  # Sentinel for devil AI (backward compat)
 DEVIL_TG_IDS = [-1, -2, -3]  # Multiple devil AI sentinels
@@ -45,6 +47,10 @@ def _is_devil(tg_id: int) -> bool:
 def _escape_text(value: object) -> str:
     """Escape user-controlled text for Telegram HTML parse mode."""
     return html_escape(str(value), quote=False)
+
+
+def _format_multiplier(value: float) -> str:
+    return f"{value:.2f}".rstrip("0").rstrip(".")
 
 
 def _format_player_name(player: dict, *, mention: bool = False) -> str:
@@ -186,6 +192,72 @@ def _alive_players(state: GameState) -> list[dict]:
     return [p for p in state.players if p["alive"]]
 
 
+def _clear_player_round_state(player: dict) -> None:
+    player["items"] = []
+    player["saw_active"] = False
+    player["known_shell"] = None
+
+
+def _eliminate_player(state: GameState, player: dict) -> None:
+    player["hp"] = 0
+    player["alive"] = False
+    _clear_player_round_state(player)
+
+    player_tg_id = player["tg_id"]
+    if player_tg_id in state.handcuffed_tg_ids:
+        state.handcuffed_tg_ids = [tid for tid in state.handcuffed_tg_ids if tid != player_tg_id]
+
+
+def _alive_human_players(state: GameState) -> list[dict]:
+    return [p for p in _alive_players(state) if not p.get("is_devil")]
+
+
+def _alive_devil_players(state: GameState, *, exclude_tg_id: int = 0) -> list[dict]:
+    return [
+        p for p in _alive_players(state)
+        if p.get("is_devil") and p["tg_id"] != exclude_tg_id
+    ]
+
+
+def _pick_devil_focus_target(state: GameState, alive_opponents: list[dict]) -> dict | None:
+    if not alive_opponents:
+        return None
+
+    return min(
+        alive_opponents,
+        key=lambda p: (
+            0 if p["tg_id"] in state.handcuffed_tg_ids else 1,
+            int(p.get("hp", 0) or 0),
+            -sum(1 for item in p.get("items", []) if item != "adrenaline"),
+            int(p.get("tg_id", 0) or 0),
+        ),
+    )
+
+
+def _pick_devil_handcuff_target(
+    state: GameState,
+    alive_opponents: list[dict],
+    focus_target: dict | None,
+) -> dict | None:
+    available = [p for p in alive_opponents if p["tg_id"] not in state.handcuffed_tg_ids]
+    if not available:
+        return None
+
+    if focus_target and len(available) > 1:
+        off_focus = [p for p in available if p["tg_id"] != focus_target["tg_id"]]
+        if off_focus:
+            available = off_focus
+
+    return max(
+        available,
+        key=lambda p: (
+            int(p.get("hp", 0) or 0),
+            sum(1 for item in p.get("items", []) if item != "adrenaline"),
+            -int(p.get("tg_id", 0) or 0),
+        ),
+    )
+
+
 def _current_turn_tg_id(state: GameState) -> int:
     alive_tids = [
         tid
@@ -229,6 +301,7 @@ def _init_round(state: GameState) -> list[str]:
     cfg = ROUND_CONFIG[min(rnd, len(ROUND_CONFIG) - 1)]
     msgs: list[str] = []
     round_max_hp = cfg["hp"]
+    item_recipients: list[dict] = []
 
     if rnd == 0:
         # Multiplayer (2+ human players) starts at 3 HP by default.
@@ -237,19 +310,26 @@ def _init_round(state: GameState) -> list[str]:
             round_max_hp = max(round_max_hp, 3)
 
     for p in state.players:
-        if p["alive"]:
-            # First round: set initial HP. Later rounds: keep current HP, just raise max.
-            if rnd == 0:
-                p["hp"] = round_max_hp
-                p["max_hp"] = round_max_hp
-            else:
-                # Raise max_hp but DON'T reset current HP
-                p["max_hp"] = cfg["hp"]
-                # Cap current HP to new max (in case it somehow exceeds)
-                p["hp"] = min(p["hp"], cfg["hp"])
-            p["items"] = []
-            p["saw_active"] = False
-            p["known_shell"] = None
+        if not p["alive"]:
+            _clear_player_round_state(p)
+            continue
+
+        if rnd > 0 and int(p.get("hp", 0) or 0) <= 0:
+            _eliminate_player(state, p)
+            continue
+
+        # First round: set initial HP. Later rounds: keep current HP, just raise max.
+        if rnd == 0:
+            p["hp"] = round_max_hp
+            p["max_hp"] = round_max_hp
+        else:
+            # Raise max_hp but DON'T reset current HP
+            p["max_hp"] = cfg["hp"]
+            # Cap current HP to new max (in case it somehow exceeds)
+            p["hp"] = min(p["hp"], cfg["hp"])
+
+        _clear_player_round_state(p)
+        item_recipients.append(p)
 
     live_count = random.randint(cfg["live_min"], cfg["live_max"])
     blank_count = cfg["shells"] - live_count
@@ -269,7 +349,7 @@ def _init_round(state: GameState) -> list[str]:
 
     if cfg["items"] > 0:
         item_pool = _item_pool_for_round(rnd)
-        for p in _alive_players(state):
+        for p in item_recipients:
             items = random.choices(item_pool, k=cfg["items"])
             p["items"] = items
             item_text = ", ".join(ITEM_NAME.get(i, i) for i in items)
@@ -280,7 +360,7 @@ def _init_round(state: GameState) -> list[str]:
 
 
 def _advance_turn(state: GameState) -> None:
-    """Move to next alive player, handling handcuff skip."""
+    """Move to next alive player, handling consecutive handcuff skips."""
     alive_tids = [
         tid
         for tid in state.turn_order
@@ -289,14 +369,17 @@ def _advance_turn(state: GameState) -> None:
     if not alive_tids:
         return
 
-    state.turn_index = (state.turn_index + 1) % len(alive_tids)
-    next_tid = alive_tids[state.turn_index]
+    skip_guard = len(alive_tids)
+    while skip_guard > 0:
+        state.turn_index = (state.turn_index + 1) % len(alive_tids)
+        next_tid = alive_tids[state.turn_index]
+        if next_tid not in state.handcuffed_tg_ids:
+            return
 
-    if next_tid in state.handcuffed_tg_ids:
         state.handcuffed_tg_ids.remove(next_tid)
         name = (_get_player(state, next_tid) or {}).get("name", "?")
         state.action_log.append(f"{name} 被铐住，跳过回合")
-        state.turn_index = (state.turn_index + 1) % len(alive_tids)
+        skip_guard -= 1
 
 
 def _check_round_end(state: GameState) -> list[str]:
@@ -378,8 +461,7 @@ def _do_shoot(state: GameState, shooter_tg_id: int, target_tg_id: int) -> list[s
             msgs.append(f"{shooter_name} → {target_name} 实弹! -{damage}HP{saw_note}")
 
         if target["hp"] <= 0:
-            target["hp"] = 0
-            target["alive"] = False
+            _eliminate_player(state, target)
             msgs.append(f"  {target_name} 被淘汰!")
     else:
         if self_shot:
@@ -529,8 +611,7 @@ def _use_item(state: GameState, user_tg_id: int, item_key: str, target_tg_id: in
             player["hp"] -= 1
             msgs.append(f"{name} 吃药 → 副作用! -1HP ({player['hp']})")
             if player["hp"] <= 0:
-                player["hp"] = 0
-                player["alive"] = False
+                _eliminate_player(state, player)
                 msgs.append(f"  {name} 药物过量被淘汰!")
                 msgs.extend(_check_round_end(state))
 
@@ -580,11 +661,15 @@ def _devil_single_step(state: GameState, devil_tg_id: int = DEVIL_TG_ID) -> list
         return []
 
     # Devils only target humans
-    alive_opponents = [p for p in _alive_players(state) if not p.get("is_devil")]
+    alive_opponents = _alive_human_players(state)
     if not alive_opponents:
         return []
 
-    making_mistake = random.random() < 0.10
+    alive_allies = _alive_devil_players(state, exclude_tg_id=devil_tg_id)
+    focus_target = _pick_devil_focus_target(state, alive_opponents)
+    handcuff_target = _pick_devil_handcuff_target(state, alive_opponents, focus_target)
+    no_mistake_mode = state.game_mode == "hell" and devil["hp"] <= 1
+    making_mistake = False if no_mistake_mode else random.random() < 0.10
     items = list(devil.get("items", []))
     known = devil.get("known_shell")
 
@@ -603,20 +688,41 @@ def _devil_single_step(state: GameState, devil_tg_id: int = DEVIL_TG_ID) -> list
 
     known = devil.get("known_shell")
 
+    if (
+        no_mistake_mode
+        and "handcuffs" in items
+        and len(alive_opponents) > 1
+        and handcuff_target is not None
+    ):
+        return _use_item(state, devil_tg_id, "handcuffs", target_tg_id=handcuff_target["tg_id"])
+
     if "adrenaline" in items and alive_opponents and not making_mistake:
-        stealable_exists = any(
-            i != "adrenaline" for opponent in alive_opponents for i in opponent.get("items", [])
-        )
-        if stealable_exists:
-            strongest = max(alive_opponents, key=lambda p: p["hp"])
-            return _use_item(state, devil_tg_id, "adrenaline", target_tg_id=strongest["tg_id"])
+        stealable_targets = [
+            opponent
+            for opponent in alive_opponents
+            if any(item != "adrenaline" for item in opponent.get("items", []))
+        ]
+        if stealable_targets:
+            if focus_target and any(p["tg_id"] == focus_target["tg_id"] for p in stealable_targets):
+                adrenaline_target = focus_target
+            else:
+                adrenaline_target = max(
+                    stealable_targets,
+                    key=lambda p: (
+                        sum(1 for item in p.get("items", []) if item != "adrenaline"),
+                        int(p.get("hp", 0) or 0),
+                    ),
+                )
+            return _use_item(
+                state,
+                devil_tg_id,
+                "adrenaline",
+                target_tg_id=adrenaline_target["tg_id"],
+            )
 
     if "handcuffs" in items and alive_opponents and not making_mistake:
-        # Don't handcuff someone already handcuffed
-        handcuff_candidates = [p for p in alive_opponents if p["tg_id"] not in state.handcuffed_tg_ids]
-        if handcuff_candidates:
-            strongest = max(handcuff_candidates, key=lambda p: p["hp"])
-            return _use_item(state, devil_tg_id, "handcuffs", target_tg_id=strongest["tg_id"])
+        if handcuff_target is not None:
+            return _use_item(state, devil_tg_id, "handcuffs", target_tg_id=handcuff_target["tg_id"])
 
     if "beer" in items and known is None and not making_mistake:
         return _use_item(state, devil_tg_id, "beer")
@@ -631,7 +737,12 @@ def _devil_single_step(state: GameState, devil_tg_id: int = DEVIL_TG_ID) -> list
     if "cigarette" in items and devil["hp"] < max_hp and not making_mistake:
         return _use_item(state, devil_tg_id, "cigarette")
 
-    if "pill" in items and devil["hp"] <= 1 and not making_mistake:
+    if (
+        "pill" in items
+        and devil["hp"] <= 1
+        and not making_mistake
+        and not (no_mistake_mode and alive_allies)
+    ):
         result = _use_item(state, devil_tg_id, "pill")
         if not devil["alive"]:
             return result
@@ -650,7 +761,7 @@ def _devil_single_step(state: GameState, devil_tg_id: int = DEVIL_TG_ID) -> list
         if making_mistake:
             target = random.choice(alive_opponents)
         else:
-            target = min(alive_opponents, key=lambda p: p["hp"])
+            target = focus_target or min(alive_opponents, key=lambda p: p["hp"])
         return _do_shoot(state, devil_tg_id, target["tg_id"])
     else:
         # Unknown shell
@@ -662,8 +773,8 @@ def _devil_single_step(state: GameState, devil_tg_id: int = DEVIL_TG_ID) -> list
         if live_ratio <= 0.35:
             return _do_shoot(state, devil_tg_id, devil_tg_id)
         else:
-            weakest = min(alive_opponents, key=lambda p: p["hp"])
-            return _do_shoot(state, devil_tg_id, weakest["tg_id"])
+            target = focus_target or min(alive_opponents, key=lambda p: p["hp"])
+            return _do_shoot(state, devil_tg_id, target["tg_id"])
 
 
 def _devil_turn(state: GameState, devil_tg_id: int = DEVIL_TG_ID) -> list[str]:
@@ -991,8 +1102,7 @@ async def cancel_game(
         if not player["alive"]:
             return False, "❌ 你已出局，无法再次放弃"
 
-        player["alive"] = False
-        player["hp"] = 0
+        _eliminate_player(state, player)
         state.action_log.append(f"{player['name']} 放弃比赛 (-50%赌注)")
 
         refund = state.bet // 2
@@ -1033,8 +1143,8 @@ async def _settle_game(state: GameState) -> str:
     round_reached = state.current_round  # 0-indexed
 
     if state.game_mode == "hell":
-        # Hell mode: 10x per round (exponential)
-        multiplier = 10 ** (round_reached + 1)
+        # Hell mode: base 10x, then each extra round scales by 1.5x
+        multiplier = HELL_BASE_MULTIPLIER * (HELL_ROUND_GROWTH ** round_reached)
         total_pot = int(base_pot * multiplier) - state.forfeited_pool
     else:
         # PvP / Coop: base 1.2x, +50% per extra round
@@ -1079,7 +1189,7 @@ async def _settle_game(state: GameState) -> str:
                     f" (余额: {new_balance:,})"
                 )
             if state.game_mode == "hell":
-                msgs.append(f"🔥 地狱模式 x{multiplier:,} 奖励倍率!")
+                msgs.append(f"🔥 地狱模式 x{_format_multiplier(multiplier)} 奖励倍率!")
         else:
             msgs.append("全灭，积分消失")
     else:

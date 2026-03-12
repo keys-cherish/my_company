@@ -55,7 +55,7 @@ BOT_COMMANDS = [
     BotCommand(command=CMD_LIST_COMPANY, description="查看全服公司"),
     BotCommand(command=CMD_RANK_COMPANY, description="综合实力排行榜"),
     BotCommand(command=CMD_RENAME, description="公司改名"),
-    BotCommand(command=CMD_BATTLE, description="商战（回复+可选战术）"),
+    BotCommand(command=CMD_BATTLE, description="商战（回复后随机三选战术）"),
     BotCommand(command=CMD_COOPERATE, description="合作（回复/all）"),
     BotCommand(command=CMD_NEW_PRODUCT, description="创建产品（名称 投资金额）"),
     BotCommand(command=CMD_DEMON, description="😈 恶魔轮盘赌（可选赌注）"),
@@ -91,8 +91,8 @@ HELP_TEXT = (
     "/cp — 查看和管理公司\n"
     "/cp_list — 全服公司列表\n"
     "/cp_rank — 综合实力排行\n\n"
-    "⚔️ /cp_battle [战术] — 回复某人发起商战（每次消耗200积分）\n"
-    "  战术: 稳扎稳打 / 激进营销 / 奇袭渗透\n"
+    "⚔️ /cp_battle [战术] — 回复某人发起商战（不填则随机3选1，每次消耗200积分）\n"
+    "  可直接输入战术，或让系统随机给出3个内置战术供你选择\n"
     "🤝 /cp_cooperate — 回复某人/all 合作\n"
     "  每次+2%（上限50%），次日清空，双方各+30声望\n\n"
     "📦 /cp_new_product <产品名> <投资金额>\n"

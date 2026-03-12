@@ -13,6 +13,7 @@ from config import settings
 from services.company_service import get_company_by_id
 from services.realestate_service import (
     MAX_BUILDING_LEVEL,
+    calc_estate_income,
     calc_level_income,
     calc_upgrade_cost,
     count_company_building_type,
@@ -208,7 +209,7 @@ async def cb_buy_building(callback: types.CallbackQuery):
         f"💰 购买价格：{fmt_points(bld['purchase_price'])}",
         f"📈 日收益：{fmt_points(bld['daily_dividend'])}",
         f"📅 回本周期：约{roi_days}天",
-        f"⬆️ 可升级至 Lv.{MAX_BUILDING_LEVEL}（每级+50%基础收益）",
+        f"⬆️ 可升级至 Lv.{MAX_BUILDING_LEVEL}（每级收益×1.5，按上一等级递增）",
         f"{'─' * 24}",
         f"📦 已拥有：{owned}/{max_c}",
         f"🏗 地产总数：{total_count}/{settings.max_total_estates}",
@@ -288,8 +289,9 @@ async def cb_upgrade_estate(callback: types.CallbackQuery):
         return
 
     cost = calc_upgrade_cost(bld, estate.level)
+    current_income = calc_estate_income(estate)
     new_income = calc_level_income(bld, estate.level + 1)
-    income_increase = new_income - estate.daily_dividend
+    income_increase = new_income - current_income
 
     lines = [
         f"⬆️ 地产升级确认",
@@ -297,7 +299,7 @@ async def cb_upgrade_estate(callback: types.CallbackQuery):
         f"🏢 {bld['name']} Lv.{estate.level} → Lv.{estate.level + 1}",
         f"{'─' * 24}",
         f"💰 升级费用：{fmt_points(cost)}",
-        f"📈 当前日收益：{fmt_points(estate.daily_dividend)}",
+        f"📈 当前日收益：{fmt_points(current_income)}",
         f"📈 升级后日收益：{fmt_points(new_income)}（+{fmt_points(income_increase)}）",
         f"{'─' * 24}",
         f"🏦 公司积分：{fmt_points(company.cp_points)}",

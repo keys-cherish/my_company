@@ -49,6 +49,7 @@ _TAUNTS = [
 class BattleStrategy:
     key: str
     name: str
+    summary: str
     aliases: tuple[str, ...]
     power_bonus: float
     random_spread: float
@@ -62,6 +63,7 @@ STRATEGIES: dict[str, BattleStrategy] = {
     "balanced": BattleStrategy(
         key="balanced",
         name="稳扎稳打",
+        summary="均衡推进，稳定发挥",
         aliases=("稳扎稳打", "稳", "balanced", "default", "normal"),
         power_bonus=0.00,
         random_spread=0.12,
@@ -73,6 +75,7 @@ STRATEGIES: dict[str, BattleStrategy] = {
     "aggressive": BattleStrategy(
         key="aggressive",
         name="激进营销",
+        summary="战力更高，但战损和冷却更重",
         aliases=("激进营销", "激进", "aggressive", "aggro"),
         power_bonus=0.08,
         random_spread=0.20,
@@ -84,6 +87,7 @@ STRATEGIES: dict[str, BattleStrategy] = {
     "ambush": BattleStrategy(
         key="ambush",
         name="奇袭渗透",
+        summary="更适合弱势翻盘，冷却略短",
         aliases=("奇袭渗透", "奇袭", "偷袭", "ambush"),
         power_bonus=-0.02,
         random_spread=0.18,
@@ -92,9 +96,69 @@ STRATEGIES: dict[str, BattleStrategy] = {
         cooldown_mult=0.95,
         underdog_bonus_mult=1.25,
     ),
+    "pricewar": BattleStrategy(
+        key="pricewar",
+        name="价格战",
+        summary="压低利润换市场，输出更稳但收益一般",
+        aliases=("价格战", "压价", "pricewar", "price_war"),
+        power_bonus=0.03,
+        random_spread=0.10,
+        self_damage_mult=1.18,
+        loot_mult=0.92,
+        cooldown_mult=1.00,
+        underdog_bonus_mult=1.10,
+    ),
+    "legal": BattleStrategy(
+        key="legal",
+        name="法务绞杀",
+        summary="波动更低，自身损耗更少",
+        aliases=("法务绞杀", "法务", "legal", "lawsuit"),
+        power_bonus=0.01,
+        random_spread=0.08,
+        self_damage_mult=0.88,
+        loot_mult=0.88,
+        cooldown_mult=0.90,
+        underdog_bonus_mult=1.00,
+    ),
+    "pr": BattleStrategy(
+        key="pr",
+        name="舆论造势",
+        summary="爆发更高，适合抢节奏和压冷却",
+        aliases=("舆论造势", "公关", "舆论", "pr", "public"),
+        power_bonus=0.05,
+        random_spread=0.16,
+        self_damage_mult=1.02,
+        loot_mult=1.00,
+        cooldown_mult=0.92,
+        underdog_bonus_mult=1.05,
+    ),
+    "headhunt": BattleStrategy(
+        key="headhunt",
+        name="挖角突袭",
+        summary="偏重抢资源，掠夺效率更高",
+        aliases=("挖角突袭", "挖角", "headhunt", "talent"),
+        power_bonus=0.04,
+        random_spread=0.14,
+        self_damage_mult=1.08,
+        loot_mult=1.12,
+        cooldown_mult=1.05,
+        underdog_bonus_mult=1.00,
+    ),
+    "fortress": BattleStrategy(
+        key="fortress",
+        name="守势反击",
+        summary="战力保守，但自损更低，弱势收益更高",
+        aliases=("守势反击", "守势", "反击", "fortress", "defense"),
+        power_bonus=-0.03,
+        random_spread=0.07,
+        self_damage_mult=0.78,
+        loot_mult=0.85,
+        cooldown_mult=0.86,
+        underdog_bonus_mult=1.35,
+    ),
 }
 DEFAULT_STRATEGY = STRATEGIES["balanced"]
-VALID_STRATEGY_HINT = "稳扎稳打 / 激进营销 / 奇袭渗透"
+VALID_STRATEGY_HINT = " / ".join(strategy.name for strategy in STRATEGIES.values())
 
 
 def _pick_taunt(winner_name: str, loser_name: str) -> str:
@@ -116,6 +180,17 @@ def _resolve_strategy(raw: str | None) -> BattleStrategy | None:
         if key == strategy.key or key in strategy.aliases:
             return strategy
     return None
+
+
+def get_strategy_choices(count: int = 3) -> list[BattleStrategy]:
+    strategies = list(STRATEGIES.values())
+    if count >= len(strategies):
+        return strategies
+    return random.sample(strategies, count)
+
+
+def get_strategy_by_key(key: str) -> BattleStrategy | None:
+    return STRATEGIES.get(key)
 
 
 async def _check_cooldown(tg_id: int) -> int:
@@ -200,6 +275,8 @@ def _calc_underdog_multipliers(
     defender_base: float,
     attacker_strategy: BattleStrategy,
     defender_strategy: BattleStrategy,
+    attacker_name: str,
+    defender_name: str,
 ) -> tuple[float, float, list[str]]:
     """Return (attacker_mult, defender_mult, hints)."""
     hints: list[str] = []
@@ -213,11 +290,13 @@ def _calc_underdog_multipliers(
     weak = attacker_base if attacker_is_underdog else defender_base
     strong = defender_base if attacker_is_underdog else attacker_base
     weak_strategy = attacker_strategy if attacker_is_underdog else defender_strategy
+    weak_name = attacker_name if attacker_is_underdog else defender_name
+    strong_name = defender_name if attacker_is_underdog else attacker_name
 
     gap = 1.0 - (weak / strong)  # 0~1
     base_bonus = min(0.45, gap * 0.90) * weak_strategy.underdog_bonus_mult
 
-    hints.append(f"🪄 弱势补正触发：+{base_bonus * 100:.1f}%")
+    hints.append(f"🪄 弱势补正（{weak_name}）：+{base_bonus * 100:.1f}%")
 
     attacker_mult = 1.0
     defender_mult = 1.0
@@ -231,7 +310,7 @@ def _calc_underdog_multipliers(
     if random.random() < black_swan_chance:
         swan_bonus = random.uniform(0.15, 0.35)
         favorite_debuff = random.uniform(0.85, 0.95)
-        hints.append("🌪 黑天鹅事件：弱势方抓住窗口，强势方出现重大失误！")
+        hints.append(f"🌪 黑天鹅事件：{weak_name} 抓住窗口，{strong_name} 出现重大失误！")
 
         if attacker_is_underdog:
             attacker_mult *= 1.0 + swan_bonus
@@ -382,7 +461,12 @@ async def do_battle(
     defender_base = _calc_base_power(defender_company, len(d_products), len(d_techs))
 
     a_weak_mult, d_weak_mult, underdog_hints = _calc_underdog_multipliers(
-        attacker_base, defender_base, attacker_strategy, defender_strategy
+        attacker_base,
+        defender_base,
+        attacker_strategy,
+        defender_strategy,
+        attacker_company.name,
+        defender_company.name,
     )
     attacker_power = _roll_power(attacker_base, attacker_strategy) * a_weak_mult
     defender_power = _roll_power(defender_base, defender_strategy) * d_weak_mult
@@ -392,7 +476,7 @@ async def do_battle(
     bounty_power, bounty_loot = await check_bounty_bonus(defender_company.id)
     if bounty_power > 0:
         attacker_power *= (1.0 + bounty_power)
-        underdog_hints.append(f"🎯 悬赏令加成：战力+{int(bounty_power * 100)}%")
+        underdog_hints.append(f"🎯 悬赏令加成（{attacker_company.name}）：战力+{int(bounty_power * 100)}%")
 
     attacker_won = attacker_power >= defender_power
     winner = attacker_company if attacker_won else defender_company
@@ -546,7 +630,7 @@ async def do_battle(
     if bounty_consumed:
         lines.insert(
             -3,
-            f"🎯 悬赏令触发：掠夺加成+{int(bounty_loot * 100)}%",
+            f"🎯 悬赏令触发（{defender_company.name}）：掠夺加成+{int(bounty_loot * 100)}%",
         )
     return "\n".join(lines), attacker_won, cooldown_seconds
 

@@ -15,8 +15,10 @@ from services.user_service import add_self_points
 
 _buildings_data: dict | None = None
 
-# Upgrade: each level adds 50% of base income; cost = purchase_price * upgrade_cost_mult * level
+# Upgrade: each level scales income by 1.5x and upgrade cost follows the same curve,
+# keeping marginal ROI stable instead of getting worse every level.
 MAX_BUILDING_LEVEL = 10
+DEFAULT_UPGRADE_INCOME_MULT = 1.5
 
 
 def _load_buildings() -> dict:
@@ -44,7 +46,10 @@ async def get_company_estates(session: AsyncSession, company_id: int) -> list[Re
     result = await session.execute(
         select(RealEstate).where(RealEstate.company_id == company_id)
     )
-    return list(result.scalars().all())
+    estates = list(result.scalars().all())
+    for estate in estates:
+        estate.daily_dividend = calc_estate_income(estate)
+    return estates
 
 
 async def get_total_estate_income(session: AsyncSession, company_id: int) -> int:
@@ -79,14 +84,22 @@ def calc_upgrade_cost(building_info: dict, current_level: int) -> int:
     """Calculate cost to upgrade from current_level to current_level+1."""
     base_price = building_info["purchase_price"]
     mult = building_info.get("upgrade_cost_mult", 0.6)
-    return int(base_price * mult * current_level)
+    growth_mult = building_info.get("upgrade_income_mult", DEFAULT_UPGRADE_INCOME_MULT)
+    return int(base_price * mult * (growth_mult ** max(0, current_level - 1)))
 
 
 def calc_level_income(building_info: dict, level: int) -> int:
     """Calculate daily income at a given level."""
     base = building_info["daily_dividend"]
-    # Each level adds 50% of base income
-    return int(base * (1.0 + 0.5 * (level - 1)))
+    growth_mult = building_info.get("upgrade_income_mult", DEFAULT_UPGRADE_INCOME_MULT)
+    return int(base * (growth_mult ** max(0, level - 1)))
+
+
+def calc_estate_income(estate: RealEstate) -> int:
+    building_info = get_building_info(estate.building_type)
+    if not building_info:
+        return estate.daily_dividend
+    return calc_level_income(building_info, estate.level)
 
 
 async def purchase_building(
@@ -121,7 +134,7 @@ async def purchase_building(
     estate = RealEstate(
         company_id=company_id,
         building_type=building_key,
-        daily_dividend=bld["daily_dividend"],
+        daily_dividend=calc_level_income(bld, 1),
         purchase_price=price,
     )
     session.add(estate)
