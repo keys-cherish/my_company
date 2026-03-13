@@ -14,7 +14,7 @@
     },
     "2": {
       "name": "小型企业",
-      "upgrade_cost": 5000,
+      "upgrade_cost": 8000,
       "min_employees": 2,
       "min_products": 1,
       "min_techs": 1,
@@ -22,11 +22,11 @@
       "daily_revenue_bonus": 200,
       "employee_limit_bonus": 2,
       "product_limit_bonus": 1,
-      "description": "需要: 5千积分 + 2员工 + 1产品 + 1科技"
+      "description": "需要：8千积分 + 2员工 + 1产品 + 1科技"
     },
     "3": {
       "name": "成长企业",
-      "upgrade_cost": 12000,
+      "upgrade_cost": 20000,
       "min_employees": 5,
       "min_products": 2,
       "min_techs": 2,
@@ -34,11 +34,11 @@
       "daily_revenue_bonus": 400,
       "employee_limit_bonus": 3,
       "product_limit_bonus": 2,
-      "description": "需要: 1.2万积分 + 5员工 + 2产品 + 2科技 + 日营收≥100"
+      "description": "需要：2万积分 + 5员工 + 2产品 + 2科技 + 日营收≥100"
     },
     "4": {
       "name": "中型企业",
-      "upgrade_cost": 30000,
+      "upgrade_cost": 50000,
       "min_employees": 10,
       "min_products": 3,
       "min_techs": 3,
@@ -46,11 +46,11 @@
       "daily_revenue_bonus": 1000,
       "employee_limit_bonus": 4,
       "product_limit_bonus": 3,
-      "description": "需要: 3万积分 + 10员工 + 3产品 + 3科技 + 日营收≥500"
+      "description": "需要：5万积分 + 10员工 + 3产品 + 3科技 + 日营收≥500"
     },
     "5": {
       "name": "大型企业",
-      "upgrade_cost": 80000,
+      "upgrade_cost": 120000,
       "min_employees": 18,
       "min_products": 4,
       "min_techs": 4,
@@ -58,11 +58,11 @@
       "daily_revenue_bonus": 2000,
       "employee_limit_bonus": 6,
       "product_limit_bonus": 4,
-      "description": "需要: 8万积分 + 18员工 + 4产品 + 4科技 + 日营收≥1000"
+      "description": "需要：12万积分 + 18员工 + 4产品 + 4科技 + 日营收≥1000"
     },
     "6": {
       "name": "集团企业",
-      "upgrade_cost": 200000,
+      "upgrade_cost": 300000,
       "min_employees": 28,
       "min_products": 5,
       "min_techs": 5,
@@ -70,11 +70,11 @@
       "daily_revenue_bonus": 5000,
       "employee_limit_bonus": 8,
       "product_limit_bonus": 5,
-      "description": "需要: 20万积分 + 28员工 + 5产品 + 5科技 + 日营收≥3000"
+      "description": "需要：30万积分 + 28员工 + 5产品 + 5科技 + 日营收≥3000"
     },
     "7": {
       "name": "跨国集团",
-      "upgrade_cost": 500000,
+      "upgrade_cost": 750000,
       "min_employees": 40,
       "min_products": 6,
       "min_techs": 6,
@@ -82,11 +82,11 @@
       "daily_revenue_bonus": 10000,
       "employee_limit_bonus": 12,
       "product_limit_bonus": 6,
-      "description": "需要: 50万积分 + 40员工 + 6产品 + 6科技 + 日营收≥6000"
+      "description": "需要：75万积分 + 40员工 + 6产品 + 6科技 + 日营收≥6000"
     },
     "8": {
       "name": "商业帝国",
-      "upgrade_cost": 1000000,
+      "upgrade_cost": 1600000,
       "min_employees": 55,
       "min_products": 7,
       "min_techs": 7,
@@ -94,11 +94,11 @@
       "daily_revenue_bonus": 20000,
       "employee_limit_bonus": 18,
       "product_limit_bonus": 7,
-      "description": "需要: 100万积分 + 55员工 + 7产品 + 7科技 + 日营收≥1.5万"
+      "description": "需要：160万积分 + 55员工 + 7产品 + 7科技 + 日营收≥1.5万"
     },
     "9": {
       "name": "世界500强",
-      "upgrade_cost": 2000000,
+      "upgrade_cost": 3500000,
       "min_employees": 75,
       "min_products": 8,
       "min_techs": 8,
@@ -106,11 +106,11 @@
       "daily_revenue_bonus": 40000,
       "employee_limit_bonus": 25,
       "product_limit_bonus": 8,
-      "description": "需要: 200万积分 + 75员工 + 8产品 + 8科技 + 日营收≥3万"
+      "description": "需要：350万积分 + 75员工 + 8产品 + 8科技 + 日营收≥3万"
     },
     "10": {
       "name": "商业神话",
-      "upgrade_cost": 4000000,
+      "upgrade_cost": 7500000,
       "min_employees": 100,
       "min_products": 10,
       "min_techs": 9,
@@ -118,7 +118,7 @@
       "daily_revenue_bonus": 80000,
       "employee_limit_bonus": 35,
       "product_limit_bonus": 10,
-      "description": "需要: 400万积分 + 100员工 + 10产品 + 9科技 + 日营收≥6万"
+      "description": "需要：750万积分 + 100员工 + 10产品 + 9科技 + 日营收≥6万"
     }
   },
   "max_level": 10
