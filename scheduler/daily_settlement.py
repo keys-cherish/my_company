@@ -322,6 +322,16 @@ def start_scheduler():
         minutes=5,
         id="research_realtime_settlement",
     )
+    # Holiday gift check: runs daily at 00:05 (after settlement)
+    from scheduler.holiday_gift import holiday_gift_job
+
+    _scheduler.add_job(
+        holiday_gift_job,
+        "cron",
+        hour=settings.settlement_hour,
+        minute=max(0, settings.settlement_minute + 5),
+        id="holiday_gift",
+    )
     _scheduler.start()
     logger.info(
         "Scheduler started: daily settlement at %02d:%02d (%s)",

@@ -717,6 +717,15 @@ wheels = [
 ]
 
 [[package]]
+name = "lunardate"
+version = "0.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/85/71/62fadf243502618cf2a7af5b81936a99684147c655729934f014758c3b39/lunardate-0.2.2.tar.gz", hash = "sha256:8ff8c01721bef7710f0712a302b1cb7d0b8b3ffc72a63a9a056cd01e58e5485a", size = 17686, upload-time = "2023-12-07T13:13:21.09Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a3/07/232401bb1c6bc699c5e641ad375e2582cdde90b19b18e6618ec51796b737/lunardate-0.2.2-py3-none-any.whl", hash = "sha256:cf1916337e50470a82df12d885ff47a456e89c91a3ad4e5fdf1575e063a7ed55", size = 18081, upload-time = "2023-12-07T13:13:19.333Z" },
+]
+
+[[package]]
 name = "magic-filter"
 version = "1.0.12"
 source = { registry = "https://pypi.org/simple" }
@@ -1019,6 +1028,7 @@ dependencies = [
     { name = "asyncpg" },
     { name = "httpx" },
     { name = "litestar", extra = ["standard"] },
+    { name = "lunardate" },
     { name = "pydantic-settings" },
     { name = "redis", extra = ["hiredis"] },
     { name = "sqlalchemy", extra = ["asyncio"] },
@@ -1036,6 +1046,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "litestar", extras = ["standard"], specifier = ">=2.12,<3" },
+    { name = "lunardate", specifier = ">=0.2.2" },
     { name = "pydantic-settings", specifier = ">=2.1" },
     { name = "redis", extras = ["hiredis"], specifier = ">=5.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },

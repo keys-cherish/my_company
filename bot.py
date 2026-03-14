@@ -215,6 +215,8 @@ async def main() -> None:
         asyncio.create_task(_deferred_init())
 
     set_bot(bot)
+    from scheduler.holiday_gift import set_bot as set_holiday_bot
+    set_holiday_bot(bot)
     start_scheduler()
 
     try:

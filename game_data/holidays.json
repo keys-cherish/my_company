@@ -1,0 +1,60 @@
+{
+  "_comment": "节假日 & 系统彩蛋配置。amount=个人积分, company_amount=公司积分(可选,默认0)。",
+
+  "fixed": [
+    {"date": "01-01", "name": "元旦快乐！新年大吉！",         "emoji": "\ud83c\udf86", "desc": "新年第一天，财运来了，接住！",           "amount": 1000, "company_amount": 5000},
+    {"date": "02-14", "name": "情人节快乐！",                  "emoji": "\u2764\ufe0f",  "desc": "愿天下有情人终成眷属，520 的爱意带走！", "amount": 520,  "company_amount": 0},
+    {"date": "02-29", "name": "四年一遇！2月29日！",           "emoji": "\ud83e\udd81", "desc": "闰年限定，错过再等四年，快拿走！",       "amount": 2290, "company_amount": 0},
+    {"date": "03-08", "name": "妇女节快乐！",                  "emoji": "\ud83c\udf38", "desc": "巾帼不让须眉，今天女生们最棒！",       "amount": 380,  "company_amount": 0},
+    {"date": "04-01", "name": "愚人节！骗你的——积分是真的！",   "emoji": "\ud83c\udccf", "desc": "哈哈，诚意给到位了。",                  "amount": 410,  "company_amount": 0},
+    {"date": "05-01", "name": "劳动节快乐！打工人辛苦了！",     "emoji": "\ud83d\udcaa", "desc": "五一好好歇着，积分先收好。",            "amount": 510,  "company_amount": 5000},
+    {"date": "06-01", "name": "儿童节快乐！",                  "emoji": "\ud83c\udf88", "desc": "大家都是老小孩，今天放肆玩！",         "amount": 610,  "company_amount": 0},
+    {"date": "06-18", "name": "618 大促！",                    "emoji": "\ud83d\uded2", "desc": "钱没了没关系，积分先到位！",            "amount": 618,  "company_amount": 0},
+    {"date": "08-08", "name": "双八吉日！发发发！",             "emoji": "\ud83c\udc04", "desc": "88 谐音「发发」，今天手气一定好！",     "amount": 888,  "company_amount": 0},
+    {"date": "09-10", "name": "教师节快乐！",                  "emoji": "\ud83d\udcda", "desc": "老师们辛苦了，知识无价，积分有价。",    "amount": 360,  "company_amount": 0},
+    {"date": "10-01", "name": "国庆节快乐！",                  "emoji": "\ud83c\udde8\ud83c\uddf3", "desc": "祖国生日快乐，山河无恙，人间皆安！", "amount": 1000, "company_amount": 10000},
+    {"date": "11-11", "name": "光棍节，感同身受！",             "emoji": "\ud83d\udc94", "desc": "一起单着，积分总不会飞走。",            "amount": 1111, "company_amount": 0},
+    {"date": "12-12", "name": "双十二！",                      "emoji": "\ud83d\udecd\ufe0f", "desc": "钱包空了，积分补上，继续冲！",     "amount": 1212, "company_amount": 0},
+    {"date": "12-25", "name": "圣诞快乐！HO HO HO！",         "emoji": "\ud83c\udf84", "desc": "圣诞礼物到了，接住接住！",              "amount": 880,  "company_amount": 5000}
+  ],
+
+  "weekly": [
+    {"weekday": 3, "name": "疯狂星期四，V你50！",   "emoji": "\ud83c\udf57", "desc": "周四到了，全体玩家今天有鸡腿！疯起来！", "amount": 50,  "company_amount": 0},
+    {"weekday": 5, "name": "周六快乐！",            "emoji": "\ud83c\udf89", "desc": "周末终于来了，先把积分收好，好好放松！", "amount": 200, "company_amount": 0},
+    {"weekday": 6, "name": "周日快乐！",            "emoji": "\ud83d\udecf\ufe0f", "desc": "周末最后一天，摸鱼摸到底，明天见！", "amount": 200, "company_amount": 0}
+  ],
+
+  "monthly_end": {
+    "enabled": true,
+    "name": "月末了！",
+    "emoji": "\ud83d\udcc5",
+    "desc": "这个月大家辛苦了，积分先拿着，下月继续！",
+    "amount": 300,
+    "company_amount": 0
+  },
+
+  "dongzhi": {
+    "_comment": "冬至日期逐年查表（约 12/21 或 12/22）",
+    "name": "冬至快乐！",
+    "emoji": "\u2744\ufe0f",
+    "desc": "冬至大如年，饺子汤圆随便选，吃好喝好！",
+    "amount": 210,
+    "company_amount": 0,
+    "day_by_year": {
+      "2024": 21, "2025": 22, "2026": 22, "2027": 22,
+      "2028": 21, "2029": 22, "2030": 22, "2031": 22,
+      "2032": 21, "2033": 22, "2034": 22, "2035": 22
+    }
+  },
+
+  "lunar": [
+    {"lunar_month": 1,  "lunar_day": 1,  "eve": false, "name": "新年快乐！大年初一！",  "emoji": "\ud83c\udf8a", "desc": "恭喜发财，万事如意，开门大吉！",       "amount": 10000, "company_amount": 30000},
+    {"lunar_month": 1,  "lunar_day": 1,  "eve": true,  "name": "除夕快乐！",            "emoji": "\ud83e\udde7", "desc": "年夜饭摆起来，今年最后一天，好好过！", "amount": 8880,  "company_amount": 20000},
+    {"lunar_month": 1,  "lunar_day": 15, "eve": false, "name": "元宵节快乐！",          "emoji": "\ud83c\udfee", "desc": "花灯亮起来，汤圆吃起来，热热闹闹！",   "amount": 1500,  "company_amount": 5000},
+    {"lunar_month": 5,  "lunar_day": 5,  "eve": false, "name": "端午节快乐！",          "emoji": "\ud83d\udc32", "desc": "粽子香，龙舟响，祝大家端午安康！",     "amount": 550,   "company_amount": 5000},
+    {"lunar_month": 7,  "lunar_day": 7,  "eve": false, "name": "七夕快乐！",            "emoji": "\u2b50",       "desc": "鹊桥今夜搭好了，有情人好好珍惜！",    "amount": 770,   "company_amount": 0},
+    {"lunar_month": 8,  "lunar_day": 15, "eve": false, "name": "中秋节快乐！",          "emoji": "\ud83c\udf15", "desc": "月亮最圆的一夜，月饼和积分都有！",     "amount": 1000,  "company_amount": 10000},
+    {"lunar_month": 9,  "lunar_day": 9,  "eve": false, "name": "重阳节快乐！",          "emoji": "\ud83c\udfd4\ufe0f", "desc": "登高望远，步步高升，孝敬家人别忘了！", "amount": 990, "company_amount": 0},
+    {"lunar_month": 12, "lunar_day": 23, "eve": false, "name": "小年快乐！",            "emoji": "\ud83c\udf6c", "desc": "年味来了，好日子就要开始了！",          "amount": 2300,  "company_amount": 5000}
+  ]
+}

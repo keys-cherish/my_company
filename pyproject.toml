@@ -17,6 +17,7 @@ dependencies = [
     "uvloop>=0.20.0; sys_platform != 'win32'",
     "litestar[standard]>=2.12,<3",
     "watchfiles>=1.1.1",
+    "lunardate>=0.2.2",
 ]
 
 [project.scripts]
