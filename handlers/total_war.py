@@ -11,7 +11,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from db.engine import async_session
 from keyboards.menus import tag_kb
 from services.company_service import get_companies_by_owner, get_company_by_id
-from services.user_service import add_self_points_by_tg_id, get_self_points, get_user_by_tg_id
+from services.user_service import add_self_points_by_user_id, get_self_points, get_user_by_tg_id
 from utils.formatters import fmt_points
 
 router = Router()
@@ -255,9 +255,10 @@ async def cb_total_war_confirm(callback: types.CallbackQuery):
                     await callback.message.edit_text(f"⏳ 冷却中，还需 {cd_ttl // 60} 分钟")
                     return
 
-                # Consume personal points
-                ok = await add_self_points_by_tg_id(
-                    tg_id,
+                # Consume personal points (use session-aware variant to avoid nested connection)
+                ok = await add_self_points_by_user_id(
+                    session,
+                    user.id,
                     -WAR_POINT_COST,
                     reason="total_war_consume",
                 )
@@ -271,8 +272,9 @@ async def cb_total_war_confirm(callback: types.CallbackQuery):
                 fund_ok = await add_funds(session, company_id, -fund_cost)
                 if not fund_ok:
                     # Refund personal points
-                    await add_self_points_by_tg_id(
-                        tg_id,
+                    await add_self_points_by_user_id(
+                        session,
+                        user.id,
                         WAR_POINT_COST,
                         reason="total_war_refund_fund_failed",
                     )
@@ -288,8 +290,9 @@ async def cb_total_war_confirm(callback: types.CallbackQuery):
                 if not targets:
                     # Refund
                     await add_funds(session, company_id, fund_cost)
-                    await add_self_points_by_tg_id(
-                        tg_id,
+                    await add_self_points_by_user_id(
+                        session,
+                        user.id,
                         WAR_POINT_COST,
                         reason="total_war_refund_no_targets",
                     )

@@ -675,8 +675,12 @@ async def battle(
     if guard_fail:
         return False, guard_fail.message
 
-    # Cost points to launch battle
-    consumed = await _consume_battle_points(attacker_tg_id, BATTLE_POINT_COST)
+    # Cost points to launch battle (use session-aware variant to avoid nested connection)
+    from services.user_service import add_self_points_by_user_id
+
+    consumed = await add_self_points_by_user_id(
+        session, attacker_user.id, -BATTLE_POINT_COST, reason="battle_consume"
+    )
     if not consumed:
         return False, f"❌ 积分不足，发起商战需要 {BATTLE_POINT_COST} 积分"
 
