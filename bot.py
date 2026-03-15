@@ -182,12 +182,14 @@ async def main() -> None:
     from utils.stream_event import StreamEventMiddleware
     from utils.throttle import ThrottleMiddleware
     from utils.topic_gate import TelegramErrorGuardMiddleware, TopicGateMiddleware
+    from utils.callback_dedup import CallbackDedupMiddleware
 
     # Middleware order matters: error-guard should be the outermost for handler errors.
     dp.message.middleware(TelegramErrorGuardMiddleware())
     dp.callback_query.middleware(TelegramErrorGuardMiddleware())
     dp.message.middleware(TopicGateMiddleware())
     dp.callback_query.middleware(TopicGateMiddleware())
+    dp.callback_query.middleware(CallbackDedupMiddleware())
     dp.message.middleware(MaintenanceModeMiddleware())
     dp.callback_query.middleware(MaintenanceModeMiddleware())
     dp.message.middleware(StreamEventMiddleware())

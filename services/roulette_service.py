@@ -755,7 +755,7 @@ def _devil_single_step(state: GameState, devil_tg_id: int = DEVIL_TG_ID) -> list
     if known == "live" and "saw" in items and not making_mistake:
         return _use_item(state, devil_tg_id, "saw")
 
-    max_hp = devil.get("max_hp", ROUND_CONFIG[state.current_round]["hp"])
+    max_hp = devil.get("max_hp", ROUND_CONFIG[min(state.current_round, len(ROUND_CONFIG) - 1)]["hp"])
     if "cigarette" in items and devil["hp"] < max_hp and not making_mistake:
         return _use_item(state, devil_tg_id, "cigarette")
 
@@ -1004,6 +1004,11 @@ async def start_game(
                 return False, f"❌ {p['name']} 积分不足（地狱模式入场费 {state.bet * HELL_ENTRY_MULTIPLIER:,}）", None
         # Do NOT modify state.bet — keep original bet for display and settlement.
         # The extra entry fee is already deducted; the hell multiplier handles reward scaling.
+        # Update roulette_bet keys to reflect actual total paid (for TTL refund).
+        r = await get_redis()
+        total_paid = state.bet * HELL_ENTRY_MULTIPLIER
+        for p in human_players:
+            await r.set(f"roulette_bet:{p['tg_id']}", str(total_paid), ex=BET_KEY_TTL)
 
         num_humans = len(human_players)
         devil_count = 2 if num_humans <= 1 else 3

@@ -147,7 +147,7 @@ class Settings(BaseSettings):
     roulette_min_bet: int = 1_000
     roulette_max_bet_pct: float = 1.00  # 最高赌注=公司资金的100%
     roulette_cooldown_seconds: int = 120  # 冷却2分钟
-    roulette_room_ttl_seconds: int = 60  # 房间1分钟过期
+    roulette_room_ttl_seconds: int = 600  # 房间10分钟过期
 
     # 悬赏令
     bounty_reputation_cost: int = 30
