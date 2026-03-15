@@ -332,6 +332,17 @@ def start_scheduler():
         minute=max(0, settings.settlement_minute + 5),
         id="holiday_gift",
     )
+    # Demon invasion event: every 4 hours
+    from handlers.demon_event import demon_event_trigger_job
+
+    _scheduler.add_job(
+        demon_event_trigger_job,
+        "interval",
+        hours=4,
+        id="demon_event_trigger",
+        coalesce=True,
+        max_instances=1,
+    )
     _scheduler.start()
     logger.info(
         "Scheduler started: daily settlement at %02d:%02d (%s)",

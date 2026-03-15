@@ -84,11 +84,14 @@ async def compute_base_income(
     shop_buff_mult = await get_income_buff_multiplier(company.id)
     breakdown.shop_buff = int(breakdown.product_income * (shop_buff_mult - 1.0))
 
-    # 8. Total war buff
+    # 8. Total war buff + battle aftermath buff
     r = await get_redis()
     totalwar_buff_str = await r.get(f"totalwar_buff:{company.id}")
     totalwar_buff_rate = float(totalwar_buff_str) if totalwar_buff_str else 0.0
-    breakdown.totalwar_buff = int(breakdown.product_income * totalwar_buff_rate)
+    aftermath_buff_str = await r.get(f"battle_aftermath_buff:{company.id}")
+    aftermath_buff_rate = float(aftermath_buff_str) if aftermath_buff_str else 0.0
+    combined_buff_rate = totalwar_buff_rate + aftermath_buff_rate
+    breakdown.totalwar_buff = int(breakdown.product_income * combined_buff_rate)
 
     # 9. Company type buff
     type_info = get_company_type_info(company.company_type)
@@ -151,6 +154,15 @@ async def apply_penalties(
     battle_debuff_rate = await get_company_revenue_debuff(company_id)
     if battle_debuff_rate > 0:
         breakdown.battle_debuff = int(product_income * battle_debuff_rate)
+
+    # 2b. Demon event debuff/buff
+    from services.demon_event_service import get_demon_revenue_debuff, get_demon_revenue_buff
+    demon_debuff_rate = await get_demon_revenue_debuff(company_id)
+    if demon_debuff_rate > 0:
+        breakdown.battle_debuff += int(product_income * demon_debuff_rate)
+    demon_buff_rate = await get_demon_revenue_buff(company_id)
+    if demon_buff_rate > 0:
+        breakdown.totalwar_buff += int(breakdown.product_income * demon_buff_rate)
 
     # 3. Roadshow satire penalty (one-time)
     roadshow_penalty_str = await r.get(f"roadshow_penalty:{company_id}")

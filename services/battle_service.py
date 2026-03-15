@@ -640,8 +640,8 @@ async def battle(
     attacker_tg_id: int,
     defender_tg_id: int,
     attacker_strategy: str | None = None,
-) -> tuple[bool, str]:
-    """Full battle flow with validation. Returns (success, message)."""
+) -> tuple[bool, str, dict]:
+    """Full battle flow with validation. Returns (success, message, info)."""
     from services.company_service import get_companies_by_owner
     from services.user_service import get_user_by_tg_id
     from services.rules.battle_rules import get_battle_guard_rules
@@ -673,7 +673,7 @@ async def battle(
     # 顺序检查前置条件
     guard_fail = await check_rules_sequential(get_battle_guard_rules(), **ctx)
     if guard_fail:
-        return False, guard_fail.message
+        return False, guard_fail.message, {}
 
     # Cost points to launch battle (use session-aware variant to avoid nested connection)
     from services.user_service import add_self_points_by_user_id
@@ -682,7 +682,7 @@ async def battle(
         session, attacker_user.id, -BATTLE_POINT_COST, reason="battle_consume"
     )
     if not consumed:
-        return False, f"❌ 积分不足，发起商战需要 {BATTLE_POINT_COST} 积分"
+        return False, f"❌ 积分不足，发起商战需要 {BATTLE_POINT_COST} 积分", {}
 
     # Use first company for both.
     a_company = a_companies[0]
@@ -698,4 +698,13 @@ async def battle(
     winner_owner = attacker_user.id if _attacker_won else defender_user.id
     await update_quest_progress(session, winner_owner, "battle_win_count", increment=1)
 
-    return True, f"🎯 发起商战已扣除 {BATTLE_POINT_COST} 积分\n{msg}"
+    info = {
+        "attacker_won": _attacker_won,
+        "attacker_company_id": a_company.id,
+        "defender_company_id": d_company.id,
+        "attacker_name": a_company.name,
+        "defender_name": d_company.name,
+        "strategy_name": strategy.name if strategy else "稳扎稳打",
+        "defender_tg_id": defender_tg_id,
+    }
+    return True, f"🎯 发起商战已扣除 {BATTLE_POINT_COST} 积分\n{msg}", info

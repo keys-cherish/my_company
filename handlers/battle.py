@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from aiogram import F, Router, types
@@ -95,7 +96,7 @@ async def _show_strategy_menu(
     await mark_panel(sent.chat.id, sent.message_id, attacker_tg_id)
 
 
-async def _run_battle(attacker_tg_id: int, defender_tg_id: int, strategy_key: str | None) -> tuple[bool, str]:
+async def _run_battle(attacker_tg_id: int, defender_tg_id: int, strategy_key: str | None) -> tuple[bool, str, dict]:
     async with async_session() as session:
         async with session.begin():
             return await battle(
@@ -140,8 +141,10 @@ async def cmd_battle(message: types.Message):
             return
 
         if strategy:
-            ok, msg = await _run_battle(attacker_tg_id, defender_tg_id, strategy)
+            ok, msg, info = await _run_battle(attacker_tg_id, defender_tg_id, strategy)
             await message.answer(msg)
+            if ok and info:
+                asyncio.create_task(_try_aftermath(message.bot, message.chat.id, info))
             return
 
         await _show_strategy_menu(
@@ -182,7 +185,7 @@ async def cb_battle_pick(callback: types.CallbackQuery):
         return
 
     try:
-        ok, msg = await _run_battle(callback.from_user.id, defender_tg_id, strategy.key)
+        ok, msg, info = await _run_battle(callback.from_user.id, defender_tg_id, strategy.key)
     except Exception as e:
         logger.exception("battle pick error")
         await callback.answer(f"❌ 商战出错: {e}", show_alert=True)
@@ -198,6 +201,9 @@ async def cb_battle_pick(callback: types.CallbackQuery):
         await callback.message.answer(msg)
     await callback.answer()
 
+    if info:
+        asyncio.create_task(_try_aftermath(callback.bot, callback.message.chat.id, info))
+
 
 @router.callback_query(F.data == "battle:cancel")
 async def cb_battle_cancel(callback: types.CallbackQuery):
@@ -205,4 +211,119 @@ async def cb_battle_cancel(callback: types.CallbackQuery):
         await callback.message.edit_text("已取消本次商战策略选择。")
     except Exception:
         pass
+    await callback.answer()
+
+
+# ── AI Battle Aftermath ──────────────────────────────────────────────────
+
+def _aftermath_kb(defender_tg_id: int, choices: list[dict]) -> InlineKeyboardMarkup:
+    rows = []
+    style_emoji = {"稳健": "🛡", "激进": "⚔️", "创意": "💡"}
+    for i, c in enumerate(choices):
+        emoji = style_emoji.get(c.get("style", ""), "🎯")
+        rows.append([InlineKeyboardButton(
+            text=f"{emoji} {c['title']} — {c['effect_desc']}",
+            callback_data=f"battle:aftermath:{defender_tg_id}:{i}",
+        )])
+    rows.append([InlineKeyboardButton(text="跳过", callback_data=f"battle:aftermath:{defender_tg_id}:skip")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _try_aftermath(bot, chat_id: int, info: dict):
+    """Background task: check if aftermath triggers and send choice panel to defender."""
+    from services.battle_ai_service import (
+        generate_aftermath_choices,
+        save_aftermath_state,
+        should_trigger_aftermath,
+    )
+
+    # Only trigger for the defender when the attacker won
+    if not info.get("attacker_won"):
+        return
+
+    defender_tg_id = info.get("defender_tg_id", 0)
+    if not defender_tg_id:
+        return
+
+    if not await should_trigger_aftermath(defender_tg_id):
+        return
+
+    try:
+        choices = await generate_aftermath_choices(
+            attacker_name=info.get("attacker_name", "?"),
+            defender_name=info.get("defender_name", "?"),
+            attacker_strategy=info.get("strategy_name", "稳扎稳打"),
+            battle_result="攻击方获胜",
+            loot=0,
+            battle_damage=0,
+        )
+        if not choices:
+            return
+
+        await save_aftermath_state(
+            defender_tg_id=defender_tg_id,
+            attacker_company_id=info["attacker_company_id"],
+            defender_company_id=info["defender_company_id"],
+            choices=choices,
+        )
+
+        lines = [
+            f"🎭 {info.get('defender_name', '你')} 遭到商战攻击！",
+            f"{'─' * 24}",
+            "你的顾问团队紧急拟定了3个应对方案，请尽快选择：",
+            "",
+        ]
+        for i, c in enumerate(choices, 1):
+            lines.append(f"{i}. 「{c['title']}」{c.get('style', '')}")
+            lines.append(f"   {c['desc']}")
+            lines.append(f"   效果: {c['effect_desc']}")
+            lines.append("")
+        lines.append("⏰ 5分钟内有效，过期作废")
+
+        kb = _aftermath_kb(defender_tg_id, choices)
+        await bot.send_message(chat_id, "\n".join(lines), reply_markup=kb)
+    except Exception:
+        logger.debug("Aftermath trigger failed", exc_info=True)
+
+
+@router.callback_query(F.data.startswith("battle:aftermath:"))
+async def cb_battle_aftermath(callback: types.CallbackQuery):
+    parts = callback.data.split(":")
+    defender_tg_id = int(parts[2])
+    choice_raw = parts[3]
+
+    if callback.from_user.id != defender_tg_id:
+        await callback.answer("只有被攻击方可以选择", show_alert=True)
+        return
+
+    from services.battle_ai_service import apply_aftermath_choice, load_aftermath_state
+
+    state = await load_aftermath_state(defender_tg_id)
+    if not state:
+        await callback.answer("选项已过期", show_alert=True)
+        try:
+            await callback.message.edit_text("⏰ 商战应对选项已过期。")
+        except Exception:
+            pass
+        return
+
+    if choice_raw == "skip":
+        try:
+            await callback.message.edit_text("你选择了按兵不动，静观其变。")
+        except Exception:
+            pass
+        await callback.answer()
+        return
+
+    try:
+        choice_index = int(choice_raw)
+    except (ValueError, TypeError):
+        await callback.answer("无效选项", show_alert=True)
+        return
+
+    result_msg = await apply_aftermath_choice(defender_tg_id, choice_index, state)
+    try:
+        await callback.message.edit_text(result_msg)
+    except Exception:
+        await callback.message.answer(result_msg)
     await callback.answer()

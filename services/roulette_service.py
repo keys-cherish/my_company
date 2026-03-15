@@ -33,10 +33,11 @@ MIN_BET = settings.roulette_min_bet
 MAX_BET_PCT = settings.roulette_max_bet_pct
 HELL_BASE_MULTIPLIER = 10.0
 HELL_ROUND_GROWTH = 1.5
+HELL_ENTRY_MULTIPLIER = 5  # hell mode costs 5x the base bet
 
 DEVIL_TG_ID = -1  # Sentinel for devil AI (backward compat)
-DEVIL_TG_IDS = [-1, -2, -3]  # Multiple devil AI sentinels
-DEVIL_NAMES = {-1: "魔鬼A", -2: "魔鬼B", -3: "魔鬼C"}
+DEVIL_TG_IDS = list(range(-1, -11, -1))  # [-1, -2, ..., -10]
+DEVIL_NAMES = {i: f"魔鬼{chr(64 - i)}" for i in DEVIL_TG_IDS}  # 魔鬼A ~ 魔鬼J
 
 
 def _is_devil(tg_id: int) -> bool:
@@ -760,13 +761,11 @@ def _devil_single_step(state: GameState, devil_tg_id: int = DEVIL_TG_ID) -> list
 
     if (
         "pill" in items
-        and devil["hp"] <= 1
+        and devil["hp"] >= 2
+        and devil["hp"] < max_hp
         and not making_mistake
-        and not (no_mistake_mode and alive_allies)
     ):
         result = _use_item(state, devil_tg_id, "pill")
-        if not devil["alive"]:
-            return result
         return result
 
     # No more items to use, time to shoot
@@ -990,8 +989,23 @@ async def start_game(
             asdict(PlayerState(tg_id=DEVIL_TG_IDS[0], company_id=0, name="魔鬼", is_devil=True))
         )
     elif mode == "hell":
-        # Hell mode: humans vs multiple devils
-        num_humans = len(state.players)
+        # Hell mode: humans vs multiple devils — charge extra entry fee (5x total)
+        extra_per_player = state.bet * (HELL_ENTRY_MULTIPLIER - 1)
+        human_players = [p for p in state.players if not p.get("is_devil")]
+        for p in human_players:
+            ok = await consume_self_points(p["tg_id"], extra_per_player)
+            if not ok:
+                # Refund already-charged extras for earlier players in this loop
+                for prev in human_players:
+                    if prev["tg_id"] == p["tg_id"]:
+                        break
+                    from services.user_service import add_points_by_tg_id
+                    await add_points_by_tg_id(prev["tg_id"], extra_per_player, reason="hell_entry_refund")
+                return False, f"❌ {p['name']} 积分不足（地狱模式入场费 {state.bet * HELL_ENTRY_MULTIPLIER:,}）", None
+        # Update bet to reflect the full cost
+        state.bet = state.bet * HELL_ENTRY_MULTIPLIER
+
+        num_humans = len(human_players)
         devil_count = 2 if num_humans <= 1 else 3
         state.game_mode = "hell"
         state.devil_count = devil_count
@@ -1029,6 +1043,98 @@ async def start_game(
 
     # Don't auto-execute devil turn here — handler will animate it step by step
     return True, result, state
+
+
+async def create_demon_event_room(
+    *,
+    room_id: str,
+    player_tg_id: int,
+    player_company_id: int,
+    player_name: str,
+    devil_count: int,
+    devil_hp: int,
+    player_hp: int,
+    items_per_round: int,
+) -> tuple[bool, str, GameState | None]:
+    """Create and start a demon event roulette room with custom parameters.
+
+    Used by the demon invasion event system. No bet required (event handles rewards/penalties).
+    """
+    state = GameState(
+        room_id=room_id,
+        phase="waiting",
+        bet=0,
+        creator_tg_id=player_tg_id,
+        players=[asdict(PlayerState(
+            tg_id=player_tg_id,
+            company_id=player_company_id,
+            name=player_name,
+        ))],
+    )
+
+    # Add devils
+    actual_count = min(devil_count, len(DEVIL_TG_IDS))
+    for i in range(actual_count):
+        devil_name = DEVIL_NAMES[DEVIL_TG_IDS[i]]
+        state.players.append(asdict(PlayerState(
+            tg_id=DEVIL_TG_IDS[i], company_id=0, name=devil_name, is_devil=True,
+        )))
+
+    state.game_mode = "hell"
+    state.devil_count = actual_count
+    state.phase = "playing"
+    state.current_round = 0
+
+    # Override HP for all players
+    for p in state.players:
+        if p.get("is_devil"):
+            p["hp"] = devil_hp
+            p["max_hp"] = devil_hp
+        else:
+            p["hp"] = player_hp
+            p["max_hp"] = player_hp
+
+    # Build turn order: humans first, then devils
+    human_turn = [p["tg_id"] for p in state.players if not p.get("is_devil")]
+    devil_turn = [p["tg_id"] for p in state.players if p.get("is_devil")]
+    random.shuffle(human_turn)
+    random.shuffle(devil_turn)
+    state.turn_order = [*human_turn, *devil_turn]
+
+    # Override ROUND_CONFIG items for this room by using items_per_round
+    # (handled via _init_round which reads ROUND_CONFIG, so we init manually)
+    cfg = ROUND_CONFIG[0]
+    live_count = random.randint(cfg["live_min"], cfg["live_max"])
+    blank_count = cfg["shells"] - live_count
+    shells = [True] * live_count + [False] * blank_count
+    random.shuffle(shells)
+    state.shells = shells
+    state.shell_index = 0
+    state.live_count = live_count
+    state.blank_count = blank_count
+    state.handcuffed_tg_ids = []
+    state.turn_index = 0
+
+    # Distribute items
+    if items_per_round > 0:
+        item_pool = _item_pool_for_round(0)
+        for p in state.players:
+            if p["alive"]:
+                p["items"] = random.choices(item_pool, k=items_per_round)
+
+    init_msg = f"— 恶魔入侵: {live_count}实弹 {blank_count}空弹 | 恶魔×{actual_count}"
+    state.action_log = [init_msg]
+
+    # Set player room mapping
+    r = await get_redis()
+    await r.set(f"roulette_player:{player_tg_id}", room_id, ex=ROOM_TTL)
+    await _save_state(state)
+
+    first_tid = _current_turn_tg_id(state)
+    first_player = _get_player(state, first_tid)
+    first_name = (first_player or {}).get("name", "?")
+
+    return True, f"{init_msg}\n\n{first_name} 先手", state
 
 
 @with_lock("roulette_room:{room_id}")
@@ -1165,6 +1271,37 @@ async def cancel_game(
     return False, "❌ 游戏已结束"
 
 
+async def _apply_loser_employee_penalty(tg_id: int, company_id: int, round_reached: int = 0) -> int:
+    """Loser randomly loses employees, scaling with rounds survived.
+
+    Round 0: 1-3, Round 1: 6-10, Round 2+: 20-50 (capped by actual headcount).
+    """
+    if company_id <= 0:
+        return 0
+    if round_reached <= 0:
+        lo, hi = 1, 3
+    elif round_reached == 1:
+        lo, hi = 6, 10
+    else:
+        lo, hi = 20, 50
+    try:
+        from db.engine import async_session
+        from db.models import Company
+
+        async with async_session() as session:
+            async with session.begin():
+                company = await session.get(Company, company_id)
+                if not company or company.employee_count <= 1:
+                    return 0
+                loss = random.randint(lo, min(hi, company.employee_count - 1))
+                company.employee_count -= loss
+                await session.flush()
+                return loss
+    except Exception:
+        logger.debug("Failed to apply loser employee penalty", exc_info=True)
+        return 0
+
+
 async def _settle_game(state: GameState) -> str:
     """Distribute winnings and cleanup room."""
     from services.user_service import add_points_by_tg_id, add_reputation, get_user_by_tg_id, get_self_points
@@ -1299,6 +1436,14 @@ async def _settle_game(state: GameState) -> str:
         rate = (w / total * 100) if total > 0 else 0
         name = p.get("name", "?")
         msgs.append(f"  {name}: {w}胜 {l}负 {d}平 ({rate:.1f}%)")
+
+    # Loser penalty: random employee loss
+    if not is_draw:
+        losers = [p for p in human_players if not any(w["tg_id"] == p["tg_id"] for w in human_winners)]
+        for p in losers:
+            emp_loss = await _apply_loser_employee_penalty(p["tg_id"], p.get("company_id", 0), round_reached)
+            if emp_loss > 0:
+                msgs.append(f"💀 {p['name']} 公司损失 {emp_loss} 名员工（赌狗的代价）")
 
     await _cleanup_room(state.room_id, [p["tg_id"] for p in state.players])
     return "\n".join(msgs)

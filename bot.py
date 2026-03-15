@@ -60,6 +60,7 @@ def _register_routers(dp: Dispatcher) -> None:
     from handlers.battle import router as battle_router
     from handlers.bounty import router as bounty_router
     from handlers.checkin import router as checkin_router
+    from handlers.demon_event import router as demon_event_router
     from handlers.company import router as company_router
     from handlers.company_employees import router as company_employees_router
     from handlers.company_ops import router as company_ops_router
@@ -103,6 +104,7 @@ def _register_routers(dp: Dispatcher) -> None:
     dp.include_router(checkin_router)
     dp.include_router(redpacket_router)
     dp.include_router(bounty_router)
+    dp.include_router(demon_event_router)
     dp.include_router(roulette_router)
 
     # Private chat fallback: non-admin users can only use known command prefixes.
@@ -217,6 +219,8 @@ async def main() -> None:
     set_bot(bot)
     from scheduler.holiday_gift import set_bot as set_holiday_bot
     set_holiday_bot(bot)
+    from handlers.demon_event import set_bot as set_demon_bot
+    set_demon_bot(bot)
     start_scheduler()
 
     try:

@@ -552,7 +552,9 @@ async def cb_roulette_demon_menu(callback: types.CallbackQuery):
         f"👥 多人单挑: 所有玩家协力对抗1个魔鬼\n"
         f"  胜利后奖池均分\n\n"
         f"🔥 地狱模式: 对抗2-3个魔鬼\n"
+        f"  入场费 5x（共 {state.bet * 5:,} 积分/人）\n"
         f"  基础奖励10x，后续每轮再×1.5 (1轮=10x, 2轮=15x, 3轮=22.5x)\n"
+        f"  输了损失员工（1轮:1-3人, 2轮:6-10人, 3轮+:20-50人）\n"
         f"{'━' * 20}\n"
         f"赌注: {state.bet:,} 积分/人"
     )
@@ -619,7 +621,7 @@ async def cb_roulette_hell(callback: types.CallbackQuery):
     except Exception:
         sent = await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
         await mark_panel(sent.chat.id, sent.message_id, tg_id)
-    await callback.answer("地狱模式开始! 基础10倍，后续每轮×1.5!")
+    await callback.answer("地狱模式开始! 5倍入场费，输了扣员工!")
 
     if state and state.phase == "playing" and _is_devil(_current_turn_tg_id(state)):
         await _animate_devil_turn(callback, room_id, tg_id)
