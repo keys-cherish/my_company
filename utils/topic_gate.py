@@ -84,7 +84,11 @@ class TopicGateMiddleware(BaseMiddleware):
                 if text.startswith("/"):
                     # Extract command name: "/cp_demon@botname arg" -> "cp_demon"
                     cmd = text.split()[0].lstrip("/").split("@")[0]
-                    if cmd not in allowed_cmds:
+                    # Allow sub-commands: "cp_demonevent" matches if "cp_demon" is allowed
+                    cmd_allowed = cmd in allowed_cmds or any(
+                        cmd.startswith(ac) for ac in allowed_cmds
+                    )
+                    if not cmd_allowed:
                         await event.answer(f"❌ 本话题仅支持: {', '.join('/' + c for c in sorted(allowed_cmds))}")
                         return None
                 else:

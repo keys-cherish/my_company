@@ -136,7 +136,10 @@ async def demon_event_trigger_job():
 
 
 async def _trigger_demon_event_for_random_target(
-    *, force_company_id: int | None = None, force_tg_id: int | None = None,
+    *,
+    force_company_id: int | None = None,
+    force_tg_id: int | None = None,
+    chat_id: int | None = None,
 ):
     from config import settings
 
@@ -171,12 +174,17 @@ async def _trigger_demon_event_for_random_target(
     text = _build_challenge_text(company_dict, tier)
     kb = _challenge_kb(company_id)
 
-    chat_ids = settings.allowed_chat_id_set
-    for chat_id in (chat_ids or []):
+    # Determine where to send
+    if chat_id:
+        target_chats = [chat_id]
+    else:
+        target_chats = list(settings.allowed_chat_id_set or [])
+
+    for cid in target_chats:
         try:
-            await _bot_ref.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
+            await _bot_ref.send_message(cid, text, reply_markup=kb, parse_mode="HTML")
         except Exception:
-            logger.debug("Failed to send demon event to chat %s", chat_id, exc_info=True)
+            logger.exception("Failed to send demon event to chat %s", cid)
 
 
 def _build_challenge_text(company_dict: dict, tier: dict) -> str:
@@ -244,9 +252,8 @@ async def cmd_demon_event(message: types.Message):
         _bot_ref = message.bot
 
     await _trigger_demon_event_for_random_target(
-        force_company_id=company.id, force_tg_id=tg_id,
+        force_company_id=company.id, force_tg_id=tg_id, chat_id=message.chat.id,
     )
-    await message.answer("👹 恶魔入侵事件已触发！")
 
 
 # ── Decline ──────────────────────────────────────────────────────────────
