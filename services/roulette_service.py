@@ -1002,8 +1002,8 @@ async def start_game(
                     from services.user_service import add_points_by_tg_id
                     await add_points_by_tg_id(prev["tg_id"], extra_per_player, reason="hell_entry_refund")
                 return False, f"❌ {p['name']} 积分不足（地狱模式入场费 {state.bet * HELL_ENTRY_MULTIPLIER:,}）", None
-        # Update bet to reflect the full cost
-        state.bet = state.bet * HELL_ENTRY_MULTIPLIER
+        # Do NOT modify state.bet — keep original bet for display and settlement.
+        # The extra entry fee is already deducted; the hell multiplier handles reward scaling.
 
         num_humans = len(human_players)
         devil_count = 2 if num_humans <= 1 else 3
@@ -1274,16 +1274,16 @@ async def cancel_game(
 async def _apply_loser_employee_penalty(tg_id: int, company_id: int, round_reached: int = 0) -> int:
     """Loser randomly loses employees, scaling with rounds survived.
 
-    Round 0: 1-3, Round 1: 6-10, Round 2+: 20-50 (capped by actual headcount).
+    Round 0: 1-2, Round 1: 3-5, Round 2+: 6-15 (capped by actual headcount).
     """
     if company_id <= 0:
         return 0
     if round_reached <= 0:
-        lo, hi = 1, 3
+        lo, hi = 1, 2
     elif round_reached == 1:
-        lo, hi = 6, 10
+        lo, hi = 3, 5
     else:
-        lo, hi = 20, 50
+        lo, hi = 6, 15
     try:
         from db.engine import async_session
         from db.models import Company
