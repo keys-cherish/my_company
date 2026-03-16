@@ -2,8 +2,8 @@
 
 Supports:
 - 2-3 player PvP
-- Co-op vs devil AI (多人单挑)
-- Hell mode vs multiple devils (地狱模式, base 10x then +1.5x each round)
+- Co-op vs devil AI (多人单挑, devils = players + 1)
+- Hell mode vs multiple devils (地狱模式, devils = players + 1, base 10x then +1.5x each round)
 
 Redis keys:
 - roulette_room:{room_id} -> JSON game state
@@ -937,8 +937,8 @@ async def join_room(
         return False, "❌ 房间不存在或已过期", None
     if state.phase != "waiting":
         return False, "❌ 游戏已经开始", None
-    if len(state.players) >= 3:
-        return False, "❌ 房间已满（最多3人）", None
+    if len(state.players) >= 10:
+        return False, "❌ 房间已满（最多10人）", None
     if any(p["tg_id"] == tg_id for p in state.players):
         return False, "❌ 你已经在这个房间里", None
 
@@ -956,10 +956,7 @@ async def join_room(
     await r.set(f"roulette_player:{tg_id}", room_id, ex=ROOM_TTL)
     await r.set(f"roulette_bet:{tg_id}", str(state.bet), ex=BET_KEY_TTL)
 
-    # Auto-start when room is full (3 players)
-    if len(state.players) >= 3:
-        return True, f"✅ {player_name} 加入！房间已满，游戏自动开始！", state
-    return True, f"✅ {player_name} 加入了轮盘赌！（{len(state.players)}/3）", state
+    return True, f"✅ {player_name} 加入了轮盘赌！（当前 {len(state.players)} 人）", state
 
 
 @with_lock("roulette_room:{room_id}")
@@ -971,7 +968,7 @@ async def start_game(
 ) -> tuple[bool, str, GameState | None]:
     """Start game. Only creator can start.
 
-    mode: "pvp" (player vs player), "coop" (humans vs 1 devil), "hell" (humans vs 2-3 devils)
+    mode: "pvp" (player vs player), "coop" (humans vs devils), "hell" (humans vs devils, 5x entry)
     """
     state = await _load_state(room_id)
     if not state:
@@ -982,12 +979,16 @@ async def start_game(
         return False, "❌ 只有房主可以开始游戏", None
 
     if mode == "coop":
-        # Co-op: all humans vs 1 devil
+        # Co-op: all humans vs devils (devils = humans + 1)
         state.game_mode = "coop"
-        state.devil_count = 1
-        state.players.append(
-            asdict(PlayerState(tg_id=DEVIL_TG_IDS[0], company_id=0, name="魔鬼", is_devil=True))
-        )
+        num_humans = len([p for p in state.players if not p.get("is_devil")])
+        devil_count = min(num_humans + 1, len(DEVIL_TG_IDS))
+        state.devil_count = devil_count
+        for i in range(devil_count):
+            devil_name = DEVIL_NAMES[DEVIL_TG_IDS[i]]
+            state.players.append(
+                asdict(PlayerState(tg_id=DEVIL_TG_IDS[i], company_id=0, name=devil_name, is_devil=True))
+            )
     elif mode == "hell":
         # Hell mode: humans vs multiple devils — charge extra entry fee (5x total)
         extra_per_player = state.bet * (HELL_ENTRY_MULTIPLIER - 1)
@@ -1011,7 +1012,7 @@ async def start_game(
             await r.set(f"roulette_bet:{p['tg_id']}", str(total_paid), ex=BET_KEY_TTL)
 
         num_humans = len(human_players)
-        devil_count = 2 if num_humans <= 1 else 3
+        devil_count = min(num_humans + 1, len(DEVIL_TG_IDS))
         state.game_mode = "hell"
         state.devil_count = devil_count
         for i in range(devil_count):
@@ -1587,7 +1588,7 @@ def render_game_panel(state: GameState, viewer_tg_id: int = 0) -> str:
             f"恶魔轮盘赌 - 等待中\n"
             f"{'─' * 22}\n"
             f"赌注: {state.bet:,} 积分/人\n"
-            f"玩家: {names} ({len(state.players)}/3)\n"
+            f"玩家: {names} ({len(state.players)}/10)\n"
             f"{'─' * 22}\n"
             f"等待玩家加入，或房主开始游戏"
         )

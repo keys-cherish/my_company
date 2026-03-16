@@ -491,7 +491,7 @@ async def _start_demon_game(
     # Add additional players to the room
     if len(players) > 1:
         from dataclasses import asdict
-        from services.roulette_service import PlayerState, _save_state
+        from services.roulette_service import PlayerState, _save_state, DEVIL_TG_IDS, DEVIL_NAMES
         r = await get_redis()
         for p in players[1:]:
             game_state.players.insert(
@@ -507,6 +507,20 @@ async def _start_demon_game(
             )
             game_state.turn_order.insert(0, p["tg_id"])
             await r.set(f"roulette_player:{p['tg_id']}", room_id, ex=ROOM_TTL)
+
+        # Scale devils to num_humans + 1
+        num_humans = len([x for x in game_state.players if not x.get("is_devil")])
+        target_devils = min(num_humans + 1, len(DEVIL_TG_IDS))
+        current_devils = [x for x in game_state.players if x.get("is_devil")]
+        for i in range(len(current_devils), target_devils):
+            devil_name = DEVIL_NAMES[DEVIL_TG_IDS[i]]
+            game_state.players.append(asdict(PlayerState(
+                tg_id=DEVIL_TG_IDS[i], company_id=0, name=devil_name, is_devil=True,
+                hp=tier["devil_hp"], max_hp=tier["devil_hp"],
+            )))
+            game_state.turn_order.append(DEVIL_TG_IDS[i])
+        game_state.devil_count = target_devils
+
         await _save_state(game_state)
 
     # Save meta for outcome handling
