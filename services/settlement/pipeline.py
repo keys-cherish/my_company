@@ -57,9 +57,23 @@ async def compute_base_income(
     research_buffs = await get_research_buffs(session, company.id)
 
     # 1. Product income (base)
-    breakdown.product_income = int(
+    raw_product = int(
         company.daily_revenue * multipliers["income_mult"] * market["income_mult"]
     )
+
+    # 1b. Staffing ratio — employees are essential for production output
+    # 20% baseline (owner alone), scales to 100% at full staff
+    employee_limit = get_company_employee_limit(
+        company.level,
+        company.company_type,
+        research_employee_bonus=int(research_buffs.get("employee_limit", 0)),
+    )
+    if employee_limit > 0 and company.employee_count < employee_limit:
+        staffing_ratio = company.employee_count / employee_limit
+        staffing_mult = 0.2 + 0.8 * staffing_ratio
+    else:
+        staffing_mult = 1.0
+    breakdown.product_income = int(raw_product * staffing_mult)
 
     # 2. Level bonus (permanent)
     breakdown.level_bonus = get_level_revenue_bonus(company.level)
@@ -98,12 +112,7 @@ async def compute_base_income(
     type_income_bonus = type_info.get("income_bonus", 0.0) if type_info else 0.0
     breakdown.type_bonus = int(breakdown.product_income * type_income_bonus)
 
-    # 10. Employee workforce income
-    employee_limit = get_company_employee_limit(
-        company.level,
-        company.company_type,
-        research_employee_bonus=int(research_buffs.get("employee_limit", 0)),
-    )
+    # 10. Employee workforce income (reuse employee_limit from step 1b)
     emp_base_output, emp_efficiency_bonus = calc_employee_income(
         company.employee_count,
         breakdown.product_income,

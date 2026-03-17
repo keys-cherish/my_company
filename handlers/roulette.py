@@ -158,26 +158,36 @@ def _game_kb(state, viewer_tg_id: int) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text="刷新", callback_data=f"roulette:refresh:{state.room_id}")])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
-    # Shoot buttons
-    shoot_row: list[InlineKeyboardButton] = []
+    # Shoot buttons — humans in rows, devils in rows, max 5 per row
+    human_buttons: list[InlineKeyboardButton] = []
+    devil_buttons: list[InlineKeyboardButton] = []
     for p in _alive_players(state):
         if p["tg_id"] == current:
-            shoot_row.append(
-                InlineKeyboardButton(
-                    text="射自己",
-                    callback_data=f"roulette:shoot:{state.room_id}:{current}",
-                )
+            btn = InlineKeyboardButton(
+                text="射自己",
+                callback_data=f"roulette:shoot:{state.room_id}:{current}",
             )
-        else:
+            human_buttons.append(btn)
+        elif p.get("is_devil"):
             name = p["name"][:4]
-            shoot_row.append(
+            devil_buttons.append(
                 InlineKeyboardButton(
                     text=f"射{name}",
                     callback_data=f"roulette:shoot:{state.room_id}:{p['tg_id']}",
                 )
             )
-    if shoot_row:
-        rows.append(shoot_row)
+        else:
+            name = p["name"][:4]
+            human_buttons.append(
+                InlineKeyboardButton(
+                    text=f"射{name}",
+                    callback_data=f"roulette:shoot:{state.room_id}:{p['tg_id']}",
+                )
+            )
+    for i in range(0, len(human_buttons), 5):
+        rows.append(human_buttons[i:i + 5])
+    for i in range(0, len(devil_buttons), 5):
+        rows.append(devil_buttons[i:i + 5])
 
     # Item buttons — text names instead of emoji soup
     items = player.get("items", [])

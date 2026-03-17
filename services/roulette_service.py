@@ -1297,9 +1297,10 @@ async def _apply_loser_employee_penalty(tg_id: int, company_id: int, round_reach
         async with async_session() as session:
             async with session.begin():
                 company = await session.get(Company, company_id)
-                if not company or company.employee_count <= 1:
+                if not company or company.employee_count <= 0:
                     return 0
-                loss = random.randint(lo, min(hi, company.employee_count - 1))
+                max_loss = company.employee_count  # can lose all employees
+                loss = random.randint(min(lo, max_loss), min(hi, max_loss))
                 company.employee_count -= loss
                 await session.flush()
                 return loss
@@ -1666,11 +1667,10 @@ def render_game_panel(state: GameState, viewer_tg_id: int = 0) -> str:
         max_hp = max(1, int(p.get("max_hp", 1) or 1))
         hp = max(0, min(int(p.get("hp", 0) or 0), max_hp))
         hearts = "❤️" * hp + "🤍" * (max_hp - hp)
-        lines.append(f"  {name}  {hearts}")
+        suffix = " [被铐]" if p["tg_id"] in state.handcuffed_tg_ids else ""
+        lines.append(f"  {name}  {hearts}{suffix}")
 
     lines.append("─" * 22)
-
-    # Current turn
     current = _current_turn_tg_id(state)
     cp = _get_player(state, current)
     if cp:

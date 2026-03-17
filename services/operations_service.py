@@ -24,7 +24,7 @@ WORK_HOUR_OPTIONS: dict[int, dict] = {
     8:  {"label": "🏢 正常", "income_mult": 1.00, "cost_mult": 1.00, "ethics_delta": 0},
     10: {"label": "🔥 冲刺", "income_mult": 1.50, "cost_mult": 1.10, "ethics_delta": 0},
     12: {"label": "💀 高压", "income_mult": 3.00, "cost_mult": 1.25, "ethics_delta": -5},
-    24: {"label": "☠️ 疯狂", "income_mult": 100.0, "cost_mult": 10.00, "ethics_delta": -15},
+    24: {"label": "☠️ 疯狂", "income_mult": 20.0, "cost_mult": 15.00, "ethics_delta": -25},
 }
 
 # ── 办公等级 ──────────────────────────────────────────
@@ -357,7 +357,7 @@ async def settle_profile_daily(
                 company.employee_count = max(1, company.employee_count - lost)
                 messages.append(f"💀 过劳死：高压工时导致{lost}名员工倒下！")
             else:  # 24h
-                lost = random.randint(3, 8)
+                lost = random.randint(5, 15)
                 lost = min(lost, company.employee_count - 1)
                 company.employee_count = max(1, company.employee_count - lost)
                 messages.append(f"☠️ 过劳死：疯狂工时导致{lost}名员工倒下！")
