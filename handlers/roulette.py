@@ -46,64 +46,20 @@ ROUND_MSG_DELAY = 0.8   # seconds between round transition lines
 DEVIL_ANIMATION_MAX_STEPS = 80
 TARGETABLE_ITEM_KEYS = {"handcuffs", "adrenaline"}
 
-# Track the current panel message per room so we can delete+resend
-_room_panel_msg: dict[str, types.Message] = {}
-
-
-async def _resend_panel(
-    callback: types.CallbackQuery,
+async def _safe_edit(
+    msg: types.Message,
     text: str,
     reply_markup: types.InlineKeyboardMarkup,
-    room_id: str,
     tg_id: int,
     *,
     parse_mode: str = "HTML",
-) -> types.Message | None:
-    """Delete old panel message and send a new one at the bottom of the chat.
-
-    Returns the new message, or None on failure.
-    """
-    # Delete the old message (the one the button was on)
+) -> None:
+    """Edit message in place; if it fails, send a new one."""
     try:
-        await callback.message.delete()
+        await msg.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
     except Exception:
-        pass
-
-    # Also delete any tracked panel message for this room
-    old = _room_panel_msg.pop(room_id, None)
-    if old and old.message_id != callback.message.message_id:
-        try:
-            await old.delete()
-        except Exception:
-            pass
-
-    # Send new message
-    try:
-        sent = await callback.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        sent = await msg.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
         await mark_panel(sent.chat.id, sent.message_id, tg_id)
-        _room_panel_msg[room_id] = sent
-        return sent
-    except Exception:
-        return None
-
-
-async def _edit_or_resend(
-    callback: types.CallbackQuery,
-    text: str,
-    reply_markup: types.InlineKeyboardMarkup,
-    room_id: str,
-    tg_id: int,
-    *,
-    parse_mode: str = "HTML",
-) -> types.Message | None:
-    """Try to edit the current panel; if it fails, resend at bottom."""
-    # If we have a tracked message for this room, edit that instead
-    target_msg = _room_panel_msg.get(room_id, callback.message)
-    try:
-        await target_msg.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
-        return target_msg
-    except Exception:
-        return await _resend_panel(callback, text, reply_markup, room_id, tg_id, parse_mode=parse_mode)
 
 
 def _parse_demon_bet_arg(text: str | None) -> tuple[bool, int]:
@@ -132,7 +88,7 @@ async def _animate_pending(callback: types.CallbackQuery, room_id: str, tg_id: i
 
         text = render_game_panel(state, tg_id)
         kb = _game_kb(state, tg_id)
-        await _edit_or_resend(callback, text, kb, room_id, tg_id)
+        await _safe_edit(callback.message, text, kb, tg_id)
 
         if not has_more:
             break
@@ -309,7 +265,7 @@ async def _animate_devil_turn(callback: types.CallbackQuery, room_id: str, tg_id
         if state.phase == "finished":
             text += "\n\n" + html_escape(await _settle_game(state), quote=False)
         kb = _game_kb(state, tg_id)
-        await _edit_or_resend(callback, text, kb, room_id, tg_id)
+        await _safe_edit(callback.message, text, kb, tg_id)
 
         if state.phase != "playing":
             return
@@ -679,7 +635,7 @@ async def cb_roulette_shoot(callback: types.CallbackQuery):
     if state and state.phase == "finished" and msg:
         text += "\n\n" + html_escape(msg, quote=False)
     kb = _game_kb(state, tg_id)
-    sent = await _resend_panel(callback, text, kb, room_id, tg_id)
+    await _safe_edit(callback.message, text, kb, tg_id)
     await callback.answer()
 
     # Animate pending round transition messages if any
@@ -748,7 +704,7 @@ async def cb_roulette_use_item(callback: types.CallbackQuery):
     if state and state.phase == "finished" and msg:
         text += "\n\n" + html_escape(msg, quote=False)
     kb = _game_kb(state, tg_id)
-    sent = await _resend_panel(callback, text, kb, room_id, tg_id)
+    await _safe_edit(callback.message, text, kb, tg_id)
 
     # Show magnifier result as popup
     player = _get_player(state, tg_id) if state else None
@@ -844,7 +800,7 @@ async def cb_roulette_refresh(callback: types.CallbackQuery):
     text = render_game_panel(state, tg_id)
     kb = _waiting_kb(room_id, state.creator_tg_id) if state.phase == "waiting" else _game_kb(state, tg_id)
 
-    await _resend_panel(callback, text, kb, room_id, tg_id)
+    await _safe_edit(callback.message, text, kb, tg_id)
     await callback.answer()
 
     state = await get_game_state(room_id)
