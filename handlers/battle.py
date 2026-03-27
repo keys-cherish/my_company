@@ -119,7 +119,7 @@ async def cmd_battle(message: types.Message):
             "⚔️ 用法：回复某人的消息后发送 /cp_battle [战术]\n"
             "不填战术时，会随机给出 3 个内置战术供你选择。\n"
             f"可直接输入的战术：{VALID_STRATEGY_HINT}\n"
-            f"每次真正发起商战时消耗 {BATTLE_POINT_COST} 积分。"
+            f"每次真正发起商战时消耗 {BATTLE_POINT_COST:,} 个人积分。"
         )
         return
 

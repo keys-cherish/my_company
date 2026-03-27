@@ -166,7 +166,8 @@ async def on_total_war_mention(message: types.Message):
         "⚔️🔥 全面商战 — 终极宣战 🔥⚔️",
         f"{'─' * 28}",
         f"🏢 {my_company.name}  战力: {my_power:,.0f}",
-        f"💰 积分: {fmt_points(my_company.cp_points)}",
+        f"💰 公司积分: {fmt_points(my_company.cp_points)}",
+        f"🏅 个人积分: {current_points:,}",
         f"👷 员工: {my_company.employee_count}人",
         f"{'─' * 28}",
         f"🎯 宣战对象: {len(targets)} 家公司",
@@ -182,15 +183,15 @@ async def on_total_war_mention(message: types.Message):
     lines.extend([
         "",
         f"{'─' * 28}",
-        "💸 全面商战代价:",
-        f"  🏅 个人积分: -{WAR_POINT_COST}（当前: {current_points}）",
-        f"  💰 公司积分: -{fmt_points(fund_cost)}（公司积分的{int(WAR_FUND_RATE*100)}%）",
+        "💸 全面商战代价（同时扣除个人积分 + 公司积分）:",
+        f"  🏅 个人积分: -{WAR_POINT_COST:,}（当前: {current_points:,}）",
+        f"  💰 公司积分: -{fmt_points(fund_cost)}（公司积分的{int(WAR_FUND_RATE*100)}%，最低2,000）",
         f"  👷 预计员工损失: 3-8%",
         f"  ⭐ 预计声望损失: 每战 1-5",
         "",
         "🎁 胜利收益:",
         f"  📈 全面商战Buff: 营收+{int(WAR_SELF_REVENUE_BUFF_RATE*100)}%（至次日结算）",
-        f"  💰 每胜一场: 掠夺对方积分",
+        f"  💰 每胜一场: 掠夺对方公司积分",
         f"  🧨 每胜一场: 对方营收Debuff -12%",
         "",
         "⚠️ 警告:",
@@ -203,15 +204,15 @@ async def on_total_war_mention(message: types.Message):
     can_afford = current_points >= WAR_POINT_COST and my_company.cp_points >= fund_cost
     if not can_afford:
         if current_points < WAR_POINT_COST:
-            lines.append(f"❌ 积分不足！需要 {WAR_POINT_COST}，当前 {current_points}")
+            lines.append(f"❌ 个人积分不足！需要 {WAR_POINT_COST:,}，当前 {current_points:,}")
         if my_company.cp_points < fund_cost:
-            lines.append(f"❌ 积分不足！需要 {fmt_points(fund_cost)}")
+            lines.append(f"❌ 公司积分不足！需要 {fmt_points(fund_cost)}，当前 {fmt_points(my_company.cp_points)}")
 
     buttons = []
     if can_afford:
         buttons.append([
             InlineKeyboardButton(
-                text=f"⚔️ 确认全面宣战（{WAR_POINT_COST}积分 + {fmt_points(fund_cost)}）",
+                text=f"⚔️ 确认全面宣战（个人-{WAR_POINT_COST:,} + 公司-{fmt_points(fund_cost)}）",
                 callback_data=f"totalwar:confirm:{my_company.id}",
             ),
         ])
@@ -263,7 +264,7 @@ async def cb_total_war_confirm(callback: types.CallbackQuery):
                     reason="total_war_consume",
                 )
                 if not ok:
-                    await callback.message.edit_text(f"❌ 积分不足，需要 {WAR_POINT_COST}")
+                    await callback.message.edit_text(f"❌ 个人积分不足，需要 {WAR_POINT_COST:,}")
                     return
 
                 # Consume company funds
@@ -366,7 +367,7 @@ async def cb_total_war_confirm(callback: types.CallbackQuery):
 
         result_lines.extend([
             f"{'─' * 28}",
-            f"💸 总消耗: {WAR_POINT_COST}积分 + {fmt_points(fund_cost)}",
+            f"💸 总消耗: 个人积分 -{WAR_POINT_COST:,} + 公司积分 -{fmt_points(fund_cost)}",
         ])
         if wins > 0:
             result_lines.append(

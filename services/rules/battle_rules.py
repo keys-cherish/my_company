@@ -140,7 +140,7 @@ async def check_battle_points(
             code="INSUFFICIENT_POINTS",
             actual=current_points,
             expected=battle_point_cost,
-            message=f"❌ 积分不足，发起商战需要 {battle_point_cost} 积分",
+            message=f"❌ 个人积分不足，发起商战需要 {battle_point_cost:,} 个人积分",
         )
     return None
 

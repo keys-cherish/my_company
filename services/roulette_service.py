@@ -46,15 +46,80 @@ MAX_BET_PCT = settings.roulette_max_bet_pct
 HELL_BASE_MULTIPLIER = 10.0
 HELL_ROUND_GROWTH = 1.5
 HELL_ENTRY_MULTIPLIER = 5  # hell mode costs 5x the base bet
+HELL_FIXED_NORMAL_DEVILS = 3
+HELL_KING_HP_BONUS = 1
+HELL_KING_DAMAGE_MULTIPLIER = 2
 
 DEVIL_TG_ID = -1  # Sentinel for devil AI (backward compat)
 DEVIL_TG_IDS = list(range(-1, -11, -1))  # [-1, -2, ..., -10]
 DEVIL_NAMES = {i: f"魔鬼{chr(64 - i)}" for i in DEVIL_TG_IDS}  # 魔鬼A ~ 魔鬼J
+DEVIL_KING_TG_ID = -99
+DEVIL_KING_NAME = "鬼王"
 
 
 def _is_devil(tg_id: int) -> bool:
     """Check if a tg_id represents a devil AI player."""
     return tg_id < 0
+
+
+def _build_hell_devil_roster(num_humans: int) -> list[dict[str, object]]:
+    """Build hell-mode devils by player count.
+
+    Rules:
+    - Humans < 3: no king, devils = humans + 1 (normal devils only).
+    - Humans >= 3: fixed 4 devils = A/B/C + 1 king, and no further growth.
+    """
+    if num_humans >= 3:
+        normal_count = min(HELL_FIXED_NORMAL_DEVILS, len(DEVIL_TG_IDS))
+        roster: list[dict[str, object]] = [
+            {
+                "tg_id": DEVIL_TG_IDS[i],
+                "name": DEVIL_NAMES[DEVIL_TG_IDS[i]],
+                "is_king": False,
+            }
+            for i in range(normal_count)
+        ]
+        roster.append(
+            {
+                "tg_id": DEVIL_KING_TG_ID,
+                "name": DEVIL_KING_NAME,
+                "is_king": True,
+            }
+        )
+        return roster
+
+    normal_count = min(max(1, num_humans + 1), HELL_FIXED_NORMAL_DEVILS)
+    return [
+        {
+            "tg_id": DEVIL_TG_IDS[i],
+            "name": DEVIL_NAMES[DEVIL_TG_IDS[i]],
+            "is_king": False,
+        }
+        for i in range(normal_count)
+    ]
+
+
+def _hell_mistake_rate(human_count: int, is_king: bool) -> float:
+    """3 players => higher mistake rate; more players => stronger AI."""
+    if human_count <= 3:
+        rate = 0.24
+    elif human_count == 4:
+        rate = 0.16
+    elif human_count == 5:
+        rate = 0.11
+    else:
+        rate = 0.07
+    if is_king:
+        rate *= 0.5
+    return max(0.01, min(0.5, rate))
+
+
+def _hell_strategy_bias(human_count: int, is_king: bool) -> float:
+    """Higher player counts make devils less likely to make weak decisions."""
+    bias = max(0.0, min(0.18, (human_count - 3) * 0.03))
+    if is_king:
+        bias += 0.05
+    return min(0.25, bias)
 
 
 def _escape_text(value: object) -> str:
@@ -154,6 +219,7 @@ class PlayerState:
     max_hp: int = 0
     items: list[str] = field(default_factory=list)
     is_devil: bool = False
+    is_king: bool = False
     alive: bool = True
     saw_active: bool = False  # next shot deals double damage
     known_shell: str | None = None  # "live" or "blank"
@@ -331,15 +397,19 @@ def _init_round(state: GameState) -> list[str]:
             _eliminate_player(state, p)
             continue
 
+        player_max_hp = round_max_hp
+        if state.game_mode == "hell" and p.get("is_devil") and p.get("is_king"):
+            player_max_hp += HELL_KING_HP_BONUS
+
         # First round: set initial HP. Later rounds: keep current HP, just raise max.
         if rnd == 0:
-            p["hp"] = round_max_hp
-            p["max_hp"] = round_max_hp
+            p["hp"] = player_max_hp
+            p["max_hp"] = player_max_hp
         else:
             # Raise max_hp but DON'T reset current HP
-            p["max_hp"] = cfg["hp"]
+            p["max_hp"] = player_max_hp
             # Cap current HP to new max (in case it somehow exceeds)
-            p["hp"] = min(p["hp"], cfg["hp"])
+            p["hp"] = min(p["hp"], player_max_hp)
 
         _clear_player_round_state(p)
         item_recipients.append(p)
@@ -492,17 +562,24 @@ def _do_shoot(state: GameState, shooter_tg_id: int, target_tg_id: int) -> list[s
     self_shot = shooter_tg_id == target_tg_id
     shooter["known_shell"] = None
 
-    damage = 2 if shooter.get("saw_active") else 1
-    saw_note = "(手锯x2)" if shooter.get("saw_active") else ""
+    base_damage = 1
+    note_parts: list[str] = []
+    if shooter.get("is_devil") and shooter.get("is_king"):
+        base_damage = HELL_KING_DAMAGE_MULTIPLIER
+        note_parts.append(f"鬼王x{HELL_KING_DAMAGE_MULTIPLIER}")
+    if shooter.get("saw_active"):
+        note_parts.append("手锯x2")
+    damage = base_damage * (2 if shooter.get("saw_active") else 1)
+    damage_note = f" ({' + '.join(note_parts)})" if note_parts else ""
     shooter["saw_active"] = False
     msgs: list[str] = []
 
     if is_live:
         target["hp"] -= damage
         if self_shot:
-            msgs.append(f"{shooter_name} 对自己开枪 → 实弹! -{damage}HP{saw_note}")
+            msgs.append(f"{shooter_name} 对自己开枪 → 实弹! -{damage}HP{damage_note}")
         else:
-            msgs.append(f"{shooter_name} → {target_name} 实弹! -{damage}HP{saw_note}")
+            msgs.append(f"{shooter_name} → {target_name} 实弹! -{damage}HP{damage_note}")
 
         if target["hp"] <= 0:
             _eliminate_player(state, target)
@@ -709,11 +786,18 @@ def _devil_single_step(state: GameState, devil_tg_id: int = DEVIL_TG_ID) -> list
     if not alive_opponents:
         return []
 
+    alive_human_count = len(alive_opponents)
+    is_king = bool(devil.get("is_king"))
     alive_allies = _alive_devil_players(state, exclude_tg_id=devil_tg_id)
     focus_target = _pick_devil_focus_target(state, alive_opponents)
     handcuff_target = _pick_devil_handcuff_target(state, alive_opponents, focus_target)
-    no_mistake_mode = state.game_mode == "hell" and devil["hp"] <= 1
-    making_mistake = False if no_mistake_mode else random.random() < 0.10
+    if state.game_mode == "hell":
+        mistake_rate = _hell_mistake_rate(alive_human_count, is_king)
+        no_mistake_mode = (devil["hp"] <= 1 and not is_king) or (is_king and alive_human_count >= 4)
+    else:
+        mistake_rate = 0.10
+        no_mistake_mode = False
+    making_mistake = False if no_mistake_mode else random.random() < mistake_rate
     items = list(devil.get("items", []))
     known = devil.get("known_shell")
 
@@ -812,7 +896,10 @@ def _devil_single_step(state: GameState, devil_tg_id: int = DEVIL_TG_ID) -> list
             return _do_shoot(state, devil_tg_id, target["tg_id"])
         remaining = state.shells[state.shell_index:]
         live_ratio = sum(1 for s in remaining if s) / max(1, len(remaining))
-        if live_ratio <= 0.35:
+        shoot_self_threshold = 0.35
+        if state.game_mode == "hell":
+            shoot_self_threshold = max(0.10, 0.35 - _hell_strategy_bias(alive_human_count, is_king))
+        if live_ratio <= shoot_self_threshold:
             return _do_shoot(state, devil_tg_id, devil_tg_id)
         else:
             target = focus_target or min(alive_opponents, key=lambda p: p["hp"])
@@ -1077,13 +1164,20 @@ async def start_game(
             await r.set(f"roulette_bet:{p['tg_id']}", str(total_paid), ex=BET_KEY_TTL)
 
         num_humans = len(human_players)
-        devil_count = min(num_humans + 1, len(DEVIL_TG_IDS))
+        devil_roster = _build_hell_devil_roster(num_humans)
         state.game_mode = "hell"
-        state.devil_count = devil_count
-        for i in range(devil_count):
-            devil_name = DEVIL_NAMES[DEVIL_TG_IDS[i]]
+        state.devil_count = len(devil_roster)
+        for devil_cfg in devil_roster:
             state.players.append(
-                asdict(PlayerState(tg_id=DEVIL_TG_IDS[i], company_id=0, name=devil_name, is_devil=True))
+                asdict(
+                    PlayerState(
+                        tg_id=int(devil_cfg["tg_id"]),
+                        company_id=0,
+                        name=str(devil_cfg["name"]),
+                        is_devil=True,
+                        is_king=bool(devil_cfg["is_king"]),
+                    )
+                )
             )
     elif len(state.players) < 2:
         return False, "❌ 至少需要2名玩家，或使用恶魔模式", None
